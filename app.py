@@ -178,16 +178,13 @@ with col1:
     if 'story_text' not in st.session_state:
         st.session_state.story_text = ""
     
-    # Ensure text area is empty after submission
-    if st.session_state.story_text == "":
-        st.session_state.story_text = ""  # Force reset
-    
     story = st.text_area(
-        'Enter your story here (Sinhala)',
+        label='Enter your story here (Sinhala)',
         value=st.session_state.story_text,
         height=400,
         placeholder="ඔබේ කතාව මෙහි ලියන්න...",
-        help=f"Write your story in Sinhala. Length: {MIN_STORY_LENGTH}-{MAX_STORY_LENGTH} characters"
+        help=f"Write your story in Sinhala. Length: {MIN_STORY_LENGTH}-{MAX_STORY_LENGTH} characters",
+        key="story_input"  # Add a key for better state management
     )
     
     # Character count
@@ -210,9 +207,10 @@ with col_submit:
     submit_button = st.button('✅ Submit Story', type="primary", use_container_width=True)
 
 with col_clear:
-    if st.button('🗑️ Clear', use_container_width=True):
+    def clear_text():
         st.session_state.story_text = ""
-        st.rerun()
+        
+    st.button('🗑️ Clear', on_click=clear_text, use_container_width=True)
 
 # Handle submission
 if submit_button:
