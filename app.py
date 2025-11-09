@@ -241,7 +241,7 @@ if submit_button:
                 
                 # Clear the text area
                 st.session_state.story_text = ""
-                time.sleep(2)
+                time.sleep(60000 / 1000)  # Wait for 60 seconds to avoid rate limits
                 st.rerun()
                 
         except Exception as e:
