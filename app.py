@@ -15,18 +15,6 @@ DATASET_REPO = 'Isuru0x01/sinhala_stories'
 # Debug information in sidebar
 st.sidebar.write("Token preview:", f"{HUGGINGFACE_TOKEN[:8]}...")
 
-# Validate token and show user info
-try:
-    api = HfApi()
-    user_info = api.whoami(token=HUGGINGFACE_TOKEN)
-    if user_info:
-        st.sidebar.success(f"✅ Authenticated as: {user_info['name']}")
-        st.sidebar.write("Token Status: Valid")
-    else:
-        st.sidebar.error("❌ Token validation failed")
-except Exception as e:
-    st.sidebar.error("❌ Token error: " + str(e))
-
 MIN_STORY_LENGTH = 50  # Minimum characters
 MAX_STORY_LENGTH = 50000  # Maximum characters
 
@@ -161,30 +149,19 @@ if submit_button:
         for error in validation_errors:
             st.error(error)
     else:
-        # Check token
-        if not HUGGINGFACE_TOKEN:
-            st.error("❌ Hugging Face token not found in secrets!")
-            st.stop()
-            
-        # Validate token and repository access
+        # Validate repository access
         try:
-            api = HfApi()
-            # Check if token is valid
-            user_info = api.whoami(token=HUGGINGFACE_TOKEN)
-            if not user_info:
-                st.error("❌ Invalid or expired Hugging Face token! Please update your token.")
-                st.stop()
-                
+            api = HfApi(token=HUGGINGFACE_TOKEN)
             # Check repository access
             try:
-                repo_info = api.repo_info(repo_id=DATASET_REPO, token=HUGGINGFACE_TOKEN)
+                repo_info = api.repo_info(repo_id=DATASET_REPO, repo_type="dataset", token=HUGGINGFACE_TOKEN)
                 st.success(f"✅ Connected to repository: {DATASET_REPO}")
             except Exception as repo_error:
                 st.error(f"❌ Cannot access repository {DATASET_REPO}. Error: {str(repo_error)}")
                 st.stop()
                 
         except Exception as e:
-            st.error("❌ Error validating Hugging Face token. Please ensure your token is valid and has write permissions.")
+            st.error(f"❌ Error connecting to Hugging Face. Please ensure your repository is accessible.")
             st.error(f"Detailed error: {str(e)}")
             st.stop()
         
@@ -194,7 +171,7 @@ if submit_button:
                 status_text = st.empty()
                 
                 # Initialize Hugging Face API
-                api = HfApi()
+                api = HfApi(token=HUGGINGFACE_TOKEN)
                 
                 # Step 1: Check for duplicates
                 status_text.text("🔍 Checking for duplicates...")
@@ -232,13 +209,14 @@ if submit_button:
                 # Upload the file
                 operations = [
                     CommitOperationAdd(
-                        path_in_repo="stories.jsonl",  # Changed to root directory for simplicity
-                        path_or_fileobj=temp_file
+                        path_in_repo="stories.jsonl",  # Path where the file should be stored in the repo
+                        path_or_fileobj=temp_file      # Path to the temporary file on your local system
                     )
                 ]
                 
                 api.create_commit(
                     repo_id=DATASET_REPO,
+                    repo_type="dataset",
                     operations=operations,
                     commit_message=f"Add new story via Streamlit app ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})",
                     token=HUGGINGFACE_TOKEN
