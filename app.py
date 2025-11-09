@@ -268,31 +268,32 @@ if submit_button:
                 # Step 3: Upload directly to the hub
                 status_text.text("☁️ Uploading to Hugging Face...")
                 
-                # Create new story dataset
-                stories_dataset = Dataset.from_dict({"story": [story.strip()]})
-                
-                # Push directly to hub
-                stories_dataset.push_to_hub(
-                    DATASET_REPO,
-                    token=HUGGINGFACE_TOKEN,
-                    commit_message=f"Add new story via Streamlit app ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})"
-                )
-                
-                # Upload the file
-                operations = [
-                    CommitOperationAdd(
-                        path_in_repo="stories.jsonl",  # Path where the file should be stored in the repo
-                        path_or_fileobj=temp_file      # Path to the temporary file on your local system
+                try:
+                    # First, load the existing dataset
+                    existing_dataset = load_dataset(DATASET_REPO, token=HUGGINGFACE_TOKEN)
+                    
+                    # Get the existing stories from the 'train' split
+                    existing_stories = existing_dataset['train']['story']
+                    
+                    # Create a list of all stories (existing + new)
+                    all_stories = list(existing_stories) + [story.strip()]
+                    
+                    # Create updated dataset with all stories
+                    updated_dataset = Dataset.from_dict({"story": all_stories})
+                    
+                    # Push the updated dataset to hub
+                    updated_dataset.push_to_hub(
+                        DATASET_REPO,
+                        token=HUGGINGFACE_TOKEN,
+                        commit_message=f"Add new story via Streamlit app ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})"
                     )
-                ]
-                
-                api.create_commit(
-                    repo_id=DATASET_REPO,
-                    repo_type="dataset",
-                    operations=operations,
-                    commit_message=f"Add new story via Streamlit app ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})",
-                    token=HUGGINGFACE_TOKEN
-                )
+                    
+                    debug_info = f"Updated dataset with {len(all_stories)} stories"
+                    st.write(debug_info)
+                    
+                except Exception as e:
+                    st.error(f"Error updating dataset: {str(e)}")
+                    raise e
                 
                 # Clean up temporary file
                 os.remove(temp_file)
