@@ -92,13 +92,52 @@ with st.sidebar:
     if st.button("Refresh Stats"):
         with st.spinner("Loading statistics..."):
             try:
-                dataset = load_dataset(DATASET_REPO, split="train")
-                stats = get_statistics(dataset)
+                # Load both main dataset and any new entries
+                all_stories = []
+                
+                try:
+                    # Try to load the main dataset
+                    dataset = load_dataset(DATASET_REPO, split="train", token=HUGGINGFACE_TOKEN)
+                    all_stories.extend(dataset['story'])
+                except Exception as e:
+                    st.warning("Note: Main dataset not found or empty")
+                
+                try:
+                    # Try to load stories from JSONL file
+                    api = HfApi()
+                    jsonl_content = api.download_file(
+                        repo_id=DATASET_REPO,
+                        repo_type="dataset",
+                        path_in_repo="stories.jsonl",
+                        token=HUGGINGFACE_TOKEN
+                    )
+                    # Parse JSONL content
+                    for line in jsonl_content.decode('utf-8').strip().split('\n'):
+                        if line:  # Skip empty lines
+                            try:
+                                story_entry = json.loads(line)
+                                if 'story' in story_entry:
+                                    all_stories.append(story_entry['story'])
+                            except json.JSONDecodeError:
+                                continue
+                except Exception as e:
+                    st.warning("Note: No additional stories found in JSONL file")
+                
+                # Create a dataset from all stories
+                combined_dataset = Dataset.from_dict({"story": all_stories})
+                stats = get_statistics(combined_dataset)
+                
+                # Display stats
                 st.metric("Total Stories", f"{stats['total_stories']:,}")
                 st.metric("Total Characters", f"{stats['total_chars']:,}")
                 st.metric("Average Length", f"{stats['avg_length']:,}")
+                
+                # Show data sources info
+                st.info(f"📊 Statistics include stories from all sources in the dataset repository")
+                
             except Exception as e:
                 st.error(f"Failed to load stats: {str(e)}")
+                st.exception(e)
 
 # Main content
 col1, col2 = st.columns([2, 1])
