@@ -100,22 +100,18 @@ with st.sidebar:
                 
                 # Try to load the main dataset
                 try:
-                    dataset = load_dataset(DATASET_REPO, repo_type="dataset", token=HUGGINGFACE_TOKEN)
-                    # Check all available splits
-                    debug_info.append(f"Available splits: {dataset.keys()}")
+                    dataset = load_dataset(DATASET_REPO, token=HUGGINGFACE_TOKEN)
+                    debug_info.append("Successfully connected to dataset")
                     
-                    # Try to load from default split
-                    if 'train' in dataset:
-                        stories = dataset['train']['story']
-                        all_stories.extend(stories)
-                        debug_info.append(f"Found {len(stories)} stories in 'train' split")
-                    
-                    # Try to load from other splits if they exist
-                    for split in dataset.keys():
-                        if split != 'train' and 'story' in dataset[split].features:
-                            stories = dataset[split]['story']
-                            all_stories.extend(stories)
-                            debug_info.append(f"Found {len(stories)} stories in '{split}' split")
+                    # Iterate through all splits
+                    for split_name in dataset.keys():
+                        try:
+                            if 'story' in dataset[split_name].features:
+                                stories = dataset[split_name]['story']
+                                all_stories.extend(stories)
+                                debug_info.append(f"Found {len(stories)} stories in '{split_name}' split")
+                        except Exception as split_e:
+                            debug_info.append(f"Error loading split {split_name}: {str(split_e)}")
                             
                 except Exception as e:
                     debug_info.append(f"Error loading main dataset: {str(e)}")
@@ -147,9 +143,8 @@ with st.sidebar:
                                     except json.JSONDecodeError:
                                         continue
                             debug_info.append(f"Processed JSONL file: {jsonl_file}")
-                except Exception as e:
-                    debug_info.append(f"Error processing {jsonl_file}: {str(e)}")
-                
+                        except Exception as file_e:
+                            debug_info.append(f"Error processing {jsonl_file}: {str(file_e)}")
                 except Exception as e:
                     debug_info.append(f"Error listing repository files: {str(e)}")
                 
