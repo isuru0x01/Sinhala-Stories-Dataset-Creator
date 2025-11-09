@@ -45,32 +45,51 @@ def validate_story(story):
     return errors
 
 def check_duplicate(story, api, repo_id, threshold=0.9):
-    """Check if story is similar to existing ones using efficient API calls"""
+    """Check if story is similar to existing ones using dataset streaming"""
     try:
-        # Only fetch the last part of the dataset
+        # Load only the last chunk of the dataset
         dataset = load_dataset(repo_id, split="train[-100:]", token=HUGGINGFACE_TOKEN)
         
-        # Check exact duplicates by comparing first 200 characters
+        # Check for similar stories
         story_preview = story.strip()[:200]
         for existing_story in dataset['story']:
             if story_preview in existing_story[:200]:
                 return True
         return False
     except Exception:
-        # If there's an error loading the dataset slice, skip duplicate check
+        # If there's an error checking duplicates, skip the check
         return False
 
-def get_statistics(dataset):
-    """Get dataset statistics"""
-    total_stories = len(dataset)
-    total_chars = sum(len(story) for story in dataset['story'])
-    avg_length = total_chars / total_stories if total_stories > 0 else 0
-    
-    return {
-        'total_stories': total_stories,
-        'total_chars': total_chars,
-        'avg_length': int(avg_length)
-    }
+def get_statistics(api, repo_id):
+    """Get dataset statistics using dataset streaming"""
+    try:
+        # Load the dataset using streaming to minimize memory usage
+        dataset = load_dataset(repo_id, streaming=True, token=HUGGINGFACE_TOKEN)
+        
+        total_stories = 0
+        total_chars = 0
+        
+        # Process the dataset in chunks
+        for batch in dataset['train'].iter(batch_size=100):
+            if 'story' in batch:
+                stories = batch['story']
+                total_stories += len(stories)
+                total_chars += sum(len(story) for story in stories)
+        
+        avg_length = total_chars / total_stories if total_stories > 0 else 0
+        
+        return {
+            'total_stories': total_stories,
+            'total_chars': total_chars,
+            'avg_length': int(avg_length)
+        }
+    except Exception as e:
+        st.error(f"Error calculating statistics: {str(e)}")
+        return {
+            'total_stories': 0,
+            'total_chars': 0,
+            'avg_length': 0
+        }
 
 # ===== UI COMPONENTS =====
 st.title('📚 Sinhala Story Submission')
@@ -154,9 +173,9 @@ with st.sidebar:
                 # Display debug information
                 with st.expander("🔍 Debug Information"):
                     for info in debug_info:
-                        st.text(info)                # Create a dataset from all stories
-                combined_dataset = Dataset.from_dict({"story": all_stories})
-                stats = get_statistics(combined_dataset)
+                        st.text(info)                # Get statistics using the new streaming method
+                api = HfApi(token=HUGGINGFACE_TOKEN)
+                stats = get_statistics(api, DATASET_REPO)
                 
                 # Display stats
                 st.metric("Total Stories", f"{stats['total_stories']:,}")
@@ -267,26 +286,25 @@ if submit_button:
                 status_text.text("☁️ Uploading to Hugging Face...")
                 
                 try:
-                    # First, load the existing dataset
-                    existing_dataset = load_dataset(DATASET_REPO, token=HUGGINGFACE_TOKEN)
+                    # Load only the last chunk of the dataset to minimize memory usage
+                    dataset = load_dataset(DATASET_REPO, token=HUGGINGFACE_TOKEN)
                     
-                    # Get the existing stories from the 'train' split
-                    existing_stories = existing_dataset['train']['story']
+                    # Get the last 100 stories from the dataset
+                    existing_stories = list(dataset['train'].select(range(max(0, len(dataset['train']) - 100)))['story'])
                     
-                    # Create a list of all stories (existing + new)
-                    all_stories = list(existing_stories) + [story.strip()]
+                    # Add the new story
+                    new_story_dict = {"story": [story.strip()]}
+                    new_story_dataset = Dataset.from_dict(new_story_dict)
                     
-                    # Create updated dataset with all stories
-                    updated_dataset = Dataset.from_dict({"story": all_stories})
-                    
-                    # Push the updated dataset to hub
-                    updated_dataset.push_to_hub(
+                    # Push the new story to the hub
+                    new_story_dataset.push_to_hub(
                         DATASET_REPO,
                         token=HUGGINGFACE_TOKEN,
-                        commit_message=f"Add new story via Streamlit app ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})"
+                        commit_message=f"Add new story via Streamlit app ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})",
+                        branch="new-stories"  # Use a separate branch for new stories
                     )
                     
-                    debug_info = f"Updated dataset with {len(all_stories)} stories"
+                    debug_info = "Successfully appended new story to the dataset"
                     st.write(debug_info)
                     
                 except Exception as e:
