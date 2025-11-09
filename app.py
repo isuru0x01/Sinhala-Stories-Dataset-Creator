@@ -12,8 +12,20 @@ import json
 HUGGINGFACE_TOKEN = st.secrets["HUGGINGFACE_TOKEN"]  # Remove fallback value to ensure we only use the secret
 DATASET_REPO = 'Isuru0x01/sinhala_stories'
 
-# Debug: Print first few characters of token
+# Debug information in sidebar
 st.sidebar.write("Token preview:", f"{HUGGINGFACE_TOKEN[:8]}...")
+
+# Validate token and show user info
+try:
+    api = HfApi()
+    user_info = api.whoami(token=HUGGINGFACE_TOKEN)
+    if user_info:
+        st.sidebar.success(f"✅ Authenticated as: {user_info['name']}")
+        st.sidebar.write("Token Status: Valid")
+    else:
+        st.sidebar.error("❌ Token validation failed")
+except Exception as e:
+    st.sidebar.error("❌ Token error: " + str(e))
 
 MIN_STORY_LENGTH = 50  # Minimum characters
 MAX_STORY_LENGTH = 50000  # Maximum characters
@@ -154,16 +166,26 @@ if submit_button:
             st.error("❌ Hugging Face token not found in secrets!")
             st.stop()
             
-        # Validate token by attempting to get user info
+        # Validate token and repository access
         try:
             api = HfApi()
+            # Check if token is valid
             user_info = api.whoami(token=HUGGINGFACE_TOKEN)
             if not user_info:
                 st.error("❌ Invalid or expired Hugging Face token! Please update your token.")
                 st.stop()
+                
+            # Check repository access
+            try:
+                repo_info = api.repo_info(repo_id=DATASET_REPO, token=HUGGINGFACE_TOKEN)
+                st.success(f"✅ Connected to repository: {DATASET_REPO}")
+            except Exception as repo_error:
+                st.error(f"❌ Cannot access repository {DATASET_REPO}. Error: {str(repo_error)}")
+                st.stop()
+                
         except Exception as e:
             st.error("❌ Error validating Hugging Face token. Please ensure your token is valid and has write permissions.")
-            st.exception(e)
+            st.error(f"Detailed error: {str(e)}")
             st.stop()
         
         try:
@@ -197,24 +219,15 @@ if submit_button:
                 # Step 3: Upload directly to the hub
                 status_text.text("☁️ Uploading to Hugging Face...")
                 
-                try:
-                    # First try to download existing file
-                    existing_content = api.download_file(
-                        repo_id=DATASET_REPO,
-                        path_in_repo="stories.jsonl",  # Changed to root directory for simplicity
-                        token=HUGGINGFACE_TOKEN
-                    )
-                    # Append new content to existing content
-                    with open(temp_file, 'rb') as f:
-                        new_content = f.read()
-                    combined_content = existing_content + new_content
-                    
-                    # Write combined content to temp file
-                    with open(temp_file, 'wb') as f:
-                        f.write(combined_content)
-                except Exception:
-                    # If file doesn't exist, just use the new content
-                    pass
+                # Create new story dataset
+                stories_dataset = Dataset.from_dict({"story": [story.strip()]})
+                
+                # Push directly to hub
+                stories_dataset.push_to_hub(
+                    DATASET_REPO,
+                    token=HUGGINGFACE_TOKEN,
+                    commit_message=f"Add new story via Streamlit app ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})"
+                )
                 
                 # Upload the file
                 operations = [
