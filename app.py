@@ -95,35 +95,68 @@ with st.sidebar:
                 # Load both main dataset and any new entries
                 all_stories = []
                 
-                try:
-                    # Try to load the main dataset
-                    dataset = load_dataset(DATASET_REPO, split="train", token=HUGGINGFACE_TOKEN)
-                    all_stories.extend(dataset['story'])
-                except Exception as e:
-                    st.warning("Note: Main dataset not found or empty")
+                # Debug information container
+                debug_info = []
                 
+                # Try to load the main dataset
                 try:
-                    # Try to load stories from JSONL file
-                    api = HfApi()
-                    jsonl_content = api.download_file(
-                        repo_id=DATASET_REPO,
-                        repo_type="dataset",
-                        path_in_repo="stories.jsonl",
-                        token=HUGGINGFACE_TOKEN
-                    )
-                    # Parse JSONL content
-                    for line in jsonl_content.decode('utf-8').strip().split('\n'):
-                        if line:  # Skip empty lines
-                            try:
-                                story_entry = json.loads(line)
-                                if 'story' in story_entry:
-                                    all_stories.append(story_entry['story'])
-                            except json.JSONDecodeError:
-                                continue
+                    dataset = load_dataset(DATASET_REPO, repo_type="dataset", token=HUGGINGFACE_TOKEN)
+                    # Check all available splits
+                    debug_info.append(f"Available splits: {dataset.keys()}")
+                    
+                    # Try to load from default split
+                    if 'train' in dataset:
+                        stories = dataset['train']['story']
+                        all_stories.extend(stories)
+                        debug_info.append(f"Found {len(stories)} stories in 'train' split")
+                    
+                    # Try to load from other splits if they exist
+                    for split in dataset.keys():
+                        if split != 'train' and 'story' in dataset[split].features:
+                            stories = dataset[split]['story']
+                            all_stories.extend(stories)
+                            debug_info.append(f"Found {len(stories)} stories in '{split}' split")
+                            
                 except Exception as e:
-                    st.warning("Note: No additional stories found in JSONL file")
+                    debug_info.append(f"Error loading main dataset: {str(e)}")
                 
-                # Create a dataset from all stories
+                # Try different file patterns
+                api = HfApi()
+                try:
+                    # List all files in the repository
+                    files = api.list_repo_files(repo_id=DATASET_REPO, repo_type="dataset", token=HUGGINGFACE_TOKEN)
+                    debug_info.append(f"Files in repository: {files}")
+                    
+                    # Look for JSONL files
+                    jsonl_files = [f for f in files if f.endswith('.jsonl')]
+                    for jsonl_file in jsonl_files:
+                        try:
+                            content = api.download_file(
+                                repo_id=DATASET_REPO,
+                                repo_type="dataset",
+                                path_in_repo=jsonl_file,
+                                token=HUGGINGFACE_TOKEN
+                            )
+                            # Parse JSONL content
+                            for line in content.decode('utf-8').strip().split('\n'):
+                                if line:  # Skip empty lines
+                                    try:
+                                        story_entry = json.loads(line)
+                                        if 'story' in story_entry:
+                                            all_stories.append(story_entry['story'])
+                                    except json.JSONDecodeError:
+                                        continue
+                            debug_info.append(f"Processed JSONL file: {jsonl_file}")
+                except Exception as e:
+                    debug_info.append(f"Error processing {jsonl_file}: {str(e)}")
+                
+                except Exception as e:
+                    debug_info.append(f"Error listing repository files: {str(e)}")
+                
+                # Display debug information
+                with st.expander("🔍 Debug Information"):
+                    for info in debug_info:
+                        st.text(info)                # Create a dataset from all stories
                 combined_dataset = Dataset.from_dict({"story": all_stories})
                 stats = get_statistics(combined_dataset)
                 
@@ -146,6 +179,10 @@ with col1:
     # Initialize session state for story
     if 'story_text' not in st.session_state:
         st.session_state.story_text = ""
+    
+    # Ensure text area is empty after submission
+    if st.session_state.story_text == "":
+        st.session_state.story_text = ""  # Force reset
     
     story = st.text_area(
         'Enter your story here (Sinhala)',
@@ -278,10 +315,9 @@ if submit_button:
                 - Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 """)
                 
-                # Clear the text area
+                # Clear the text area immediately and rerun
                 st.session_state.story_text = ""
-                time.sleep(60000 / 1000)  # Wait for 60 seconds to avoid rate limits
-                st.rerun()
+                st.experimental_rerun()
                 
         except Exception as e:
             st.error(f"❌ Error submitting story: {str(e)}")
