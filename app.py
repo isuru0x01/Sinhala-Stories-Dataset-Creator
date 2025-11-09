@@ -315,7 +315,7 @@ if submit_button:
                 
                 # Clear the text area immediately and rerun
                 st.session_state.story_text = ""
-                st.experimental_rerun()
+                st.rerun()
                 
         except Exception as e:
             st.error(f"❌ Error submitting story: {str(e)}")
