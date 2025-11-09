@@ -1,7 +1,7 @@
 import os
 import streamlit as st
 import pandas as pd
-from huggingface_hub import HfApi, CommitOperationAdd
+from huggingface_hub import HfApi, CommitOperationAdd, hf_hub_download
 from datasets import load_dataset, Dataset
 import time
 from datetime import datetime
@@ -127,21 +127,24 @@ with st.sidebar:
                     jsonl_files = [f for f in files if f.endswith('.jsonl')]
                     for jsonl_file in jsonl_files:
                         try:
-                            content = api.download_file(
+                            # Download the file using hf_hub_download
+                            local_file_path = hf_hub_download(
                                 repo_id=DATASET_REPO,
+                                filename=jsonl_file,
                                 repo_type="dataset",
-                                path_in_repo=jsonl_file,
                                 token=HUGGINGFACE_TOKEN
                             )
-                            # Parse JSONL content
-                            for line in content.decode('utf-8').strip().split('\n'):
-                                if line:  # Skip empty lines
-                                    try:
-                                        story_entry = json.loads(line)
-                                        if 'story' in story_entry:
-                                            all_stories.append(story_entry['story'])
-                                    except json.JSONDecodeError:
-                                        continue
+                            
+                            # Read and parse the file
+                            with open(local_file_path, 'r', encoding='utf-8') as f:
+                                for line in f:
+                                    if line.strip():  # Skip empty lines
+                                        try:
+                                            story_entry = json.loads(line)
+                                            if 'story' in story_entry:
+                                                all_stories.append(story_entry['story'])
+                                        except json.JSONDecodeError:
+                                            continue
                             debug_info.append(f"Processed JSONL file: {jsonl_file}")
                         except Exception as file_e:
                             debug_info.append(f"Error processing {jsonl_file}: {str(file_e)}")
