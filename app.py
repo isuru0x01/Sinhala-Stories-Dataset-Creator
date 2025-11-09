@@ -183,7 +183,7 @@ with col1:
         key="story_input",
         height=400,
         placeholder="ඔබේ කතාව මෙහි ලියන්න...",
-        help=f"Write your story in Sinhala. Length: {MIN_STORY_LENGTH}-{MAX_STORY_LENGTH} characters")
+        help=f"Write your story in Sinhala. Length: {MIN_STORY_LENGTH}-{MAX_STORY_LENGTH} characters"
     )
     
     # Character count
