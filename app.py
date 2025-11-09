@@ -174,17 +174,16 @@ with st.sidebar:
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    # Initialize session state for story
-    if 'story_text' not in st.session_state:
-        st.session_state.story_text = ""
-    
+# Initialize session state for story input
+    if "story_input" not in st.session_state:
+        st.session_state.story_input = ""
+
     story = st.text_area(
         label='Enter your story here (Sinhala)',
-        value=st.session_state.story_text,
+        key="story_input",
         height=400,
         placeholder="ඔබේ කතාව මෙහි ලියන්න...",
-        help=f"Write your story in Sinhala. Length: {MIN_STORY_LENGTH}-{MAX_STORY_LENGTH} characters",
-        key="story_input"  # Add a key for better state management
+        help=f"Write your story in Sinhala. Length: {MIN_STORY_LENGTH}-{MAX_STORY_LENGTH} characters")
     )
     
     # Character count
@@ -207,10 +206,9 @@ with col_submit:
     submit_button = st.button('✅ Submit Story', type="primary", use_container_width=True)
 
 with col_clear:
-    def clear_text():
-        st.session_state.story_text = ""
-        
-    st.button('🗑️ Clear', on_click=clear_text, use_container_width=True)
+    if st.button('🗑️ Clear', use_container_width=True):
+        st.session_state.story_input = ""
+        st.rerun()
 
 # Handle submission
 if submit_button:
@@ -313,7 +311,7 @@ if submit_button:
                 """)
                 
                 # Clear the text area immediately and rerun
-                st.session_state.story_text = ""
+                st.session_state.story_input = ""
                 st.rerun()
                 
         except Exception as e:
