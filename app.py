@@ -184,11 +184,31 @@ if submit_button:
                 
                 # Step 3: Upload directly to the hub
                 status_text.text("☁️ Uploading to Hugging Face...")
+                
+                try:
+                    # First try to download existing file
+                    existing_content = api.download_file(
+                        repo_id=DATASET_REPO,
+                        path_in_repo="data/new_entries.jsonl",
+                        token=HUGGINGFACE_TOKEN
+                    )
+                    # Append new content to existing content
+                    with open(temp_file, 'rb') as f:
+                        new_content = f.read()
+                    combined_content = existing_content + new_content
+                    
+                    # Write combined content to temp file
+                    with open(temp_file, 'wb') as f:
+                        f.write(combined_content)
+                except Exception:
+                    # If file doesn't exist, just use the new content
+                    pass
+                
+                # Upload the file
                 operations = [
                     CommitOperationAdd(
                         path_in_repo="data/new_entries.jsonl",
-                        path_or_fileobj=temp_file,
-                        append_to_file=True
+                        path_or_fileobj=temp_file
                     )
                 ]
                 
@@ -213,7 +233,6 @@ if submit_button:
                 st.info(f"""
                 **Submission Details:**
                 - Characters: {len(story.strip()):,}
-                - Total stories in dataset: {len(updated_dataset):,}
                 - Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 """)
                 
