@@ -153,6 +153,18 @@ if submit_button:
         if not HUGGINGFACE_TOKEN:
             st.error("❌ Hugging Face token not found in secrets!")
             st.stop()
+            
+        # Validate token by attempting to get user info
+        try:
+            api = HfApi()
+            user_info = api.whoami(token=HUGGINGFACE_TOKEN)
+            if not user_info:
+                st.error("❌ Invalid or expired Hugging Face token! Please update your token.")
+                st.stop()
+        except Exception as e:
+            st.error("❌ Error validating Hugging Face token. Please ensure your token is valid and has write permissions.")
+            st.exception(e)
+            st.stop()
         
         try:
             with st.spinner('Submitting your story...'):
@@ -189,7 +201,7 @@ if submit_button:
                     # First try to download existing file
                     existing_content = api.download_file(
                         repo_id=DATASET_REPO,
-                        path_in_repo="data/new_entries.jsonl",
+                        path_in_repo="stories.jsonl",  # Changed to root directory for simplicity
                         token=HUGGINGFACE_TOKEN
                     )
                     # Append new content to existing content
@@ -207,7 +219,7 @@ if submit_button:
                 # Upload the file
                 operations = [
                     CommitOperationAdd(
-                        path_in_repo="data/new_entries.jsonl",
+                        path_in_repo="stories.jsonl",  # Changed to root directory for simplicity
                         path_or_fileobj=temp_file
                     )
                 ]
