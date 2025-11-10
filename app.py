@@ -1,8 +1,10 @@
 # streamlit_safe_append.py
 import streamlit as st
 from huggingface_hub import HfApi, CommitOperationAdd
+from huggingface_hub.utils import HfHubHTTPError
 from datetime import datetime, timezone
 import io, json, re
+import traceback
 
 # CONFIG
 HUGGINGFACE_TOKEN = st.secrets["HUGGINGFACE_TOKEN"]
@@ -32,12 +34,20 @@ def get_api():
     return HfApi(token=HUGGINGFACE_TOKEN)
 
 def get_pending_stories_count():
-    """Get the number of pending stories in the repository."""
+    """
+    Get the number of pending stories.
+    Counts files in pending/ directory that are waiting to be merged into the dataset.
+    Once merged, stories are immediately available in the dataset (no status tracking needed).
+    """
     try:
         api = get_api()
+        
+        # Count files in pending/ directory (waiting to be merged)
         files = api.list_repo_files(repo_id=DATASET_REPO, repo_type="dataset")
-        pending_files = [f for f in files if f.startswith(PENDING_DIR + "/") and f.endswith(".jsonl")]
-        return len(pending_files)
+        pending_files_count = len([f for f in files if f.startswith(PENDING_DIR + "/") and f.endswith(".jsonl")])
+        
+        return pending_files_count
+        
     except Exception as e:
         # Don't show error here - return None and handle in UI
         return None
@@ -46,61 +56,109 @@ def get_last_merge_timestamp():
     """
     Get the timestamp of the last successful merge.
     Attempts to retrieve commit history from the Hugging Face repository.
-    Returns None if commit history is not available.
+    Returns (timestamp, error_message) tuple where timestamp is None if not found.
     """
+    api = get_api()
+    
+    # Method 1: Try list_repo_commits
     try:
-        api = get_api()
-        
-        # Try different methods to get commit history
-        # Method 1: Try list_repo_commits if available
-        try:
-            if hasattr(api, 'list_repo_commits'):
-                commits = api.list_repo_commits(repo_id=DATASET_REPO, repo_type="dataset")
+        if hasattr(api, 'list_repo_commits'):
+            commits = api.list_repo_commits(repo_id=DATASET_REPO, repo_type="dataset")
+            
+            # Convert to list to iterate (it might be a generator or iterator)
+            try:
+                commits_list = list(commits) if commits else []
+            except (TypeError, AttributeError):
+                # If it's not iterable, try to access it directly
+                commits_list = [commits] if commits else []
+            
+            # Look for merge commits (they contain "Merge pending submissions" in the message)
+            for commit in commits_list:
+                # Try multiple ways to get commit message
+                commit_msg = None
+                if hasattr(commit, 'commit_message'):
+                    commit_msg = commit.commit_message
+                elif hasattr(commit, 'message'):
+                    commit_msg = commit.message
+                elif isinstance(commit, dict):
+                    commit_msg = commit.get('commit_message') or commit.get('message') or commit.get('title')
+                else:
+                    commit_msg = str(commit)
                 
-                # Look for merge commits (they contain "Merge pending submissions" in the message)
-                for commit in commits:
-                    commit_msg = getattr(commit, 'commit_message', None) or str(getattr(commit, 'message', ''))
-                    if commit_msg and "Merge pending submissions" in commit_msg:
-                        # Try to get commit date
-                        commit_date = getattr(commit, 'created_at', None) or getattr(commit, 'date', None)
-                        if commit_date:
-                            if isinstance(commit_date, datetime):
-                                return commit_date
-                            elif isinstance(commit_date, str):
-                                # Try to parse string date
-                                try:
-                                    return datetime.fromisoformat(commit_date.replace('Z', '+00:00'))
-                                except:
-                                    pass
-                        
-                        # Fallback: Parse timestamp from commit message
-                        # Format: "Merge pending submissions (20240101T120000Z) — merged X entries"
-                        match = re.search(r'\((\d{8}T\d{6}Z)\)', commit_msg)
-                        if match:
+                if commit_msg and "Merge pending submissions" in commit_msg:
+                    # Try multiple ways to get commit date
+                    commit_date = None
+                    
+                    # Check various attribute names
+                    for attr in ['created_at', 'date', 'timestamp', 'authored_date', 'committed_date']:
+                        if hasattr(commit, attr):
+                            commit_date = getattr(commit, attr)
+                            break
+                    
+                    # If it's a dict, check dict keys
+                    if commit_date is None and isinstance(commit, dict):
+                        for key in ['created_at', 'date', 'timestamp', 'authored_date', 'committed_date']:
+                            if key in commit:
+                                commit_date = commit[key]
+                                break
+                    
+                    # Process the date if found
+                    if commit_date:
+                        if isinstance(commit_date, datetime):
+                            return commit_date, None
+                        elif isinstance(commit_date, str):
                             try:
-                                ts_str = match.group(1)
-                                dt = datetime.strptime(ts_str, "%Y%m%dT%H%M%SZ")
-                                return dt.replace(tzinfo=timezone.utc)
-                            except ValueError:
+                                # Try ISO format
+                                if 'T' in commit_date:
+                                    dt = datetime.fromisoformat(commit_date.replace('Z', '+00:00'))
+                                    return dt, None
+                                # Try other formats if needed
+                            except (ValueError, AttributeError):
                                 pass
-        except (AttributeError, TypeError) as e:
-            # Method not available or incompatible format
-            pass
-        
-        # Method 2: Try to get repo info and check for revision history
-        # This is a fallback if commit listing doesn't work
-        try:
-            repo_info = api.repo_info(repo_id=DATASET_REPO, repo_type="dataset")
-            # If repo has git integration, we might be able to get commits
-            # For now, return None as we can't reliably get commit history this way
-            pass
-        except:
-            pass
-        
-        return None
-    except Exception:
-        # Silently return None on any error - we'll handle it gracefully in the UI
-        return None
+                        elif isinstance(commit_date, (int, float)):
+                            # Might be a Unix timestamp
+                            try:
+                                return datetime.fromtimestamp(commit_date, tz=timezone.utc), None
+                            except (ValueError, OSError):
+                                pass
+                    
+                    # Fallback: Parse timestamp from commit message
+                    # Format: "Merge pending submissions (20240101T120000Z) — merged X entries"
+                    match = re.search(r'\((\d{8}T\d{6}Z)\)', commit_msg)
+                    if match:
+                        try:
+                            ts_str = match.group(1)
+                            dt = datetime.strptime(ts_str, "%Y%m%dT%H%M%SZ")
+                            return dt.replace(tzinfo=timezone.utc), None
+                        except ValueError:
+                            pass
+            
+            # No merge commits found
+            return None, "No merge commits found in repository history"
+            
+    except HfHubHTTPError as e:
+        # Handle specific HTTP errors
+        if e.status_code == 401:
+            return None, "Authentication failed. Check your Hugging Face token."
+        elif e.status_code == 403:
+            return None, "Access forbidden. Token may lack repository permissions."
+        elif e.status_code == 404:
+            return None, "Repository or commit endpoint not found."
+        else:
+            return None, f"HTTP error {e.status_code}: {str(e)}"
+    except AttributeError as e:
+        # Method doesn't exist or wrong structure
+        return None, f"API method error: {str(e)}"
+    except Exception as e:
+        # Other errors - log for debugging
+        error_msg = f"Error retrieving commits: {str(e)}"
+        # Store in session state for debugging
+        if 'last_merge_error' not in st.session_state:
+            st.session_state.last_merge_error = error_msg
+        return None, error_msg
+    
+    # If we get here, the method doesn't exist
+    return None, "Commit listing method not available"
 
 def get_merge_status():
     """Get current merge status based on pending files and recent activity."""
@@ -110,10 +168,10 @@ def get_merge_status():
             return "Unknown", "Unable to determine status"
         
         if pending_count == 0:
-            return "Idle", "No pending stories. All stories have been merged."
+            return "Idle", "No files waiting to merge. All submitted stories are in the dataset."
         
         # Check if there was a recent merge (within last hour)
-        last_merge = get_last_merge_timestamp()
+        last_merge, merge_error = get_last_merge_timestamp()
         if last_merge:
             now = datetime.now(timezone.utc)
             if isinstance(last_merge, datetime):
@@ -121,7 +179,7 @@ def get_merge_status():
                 if time_diff < 3600:  # Within last hour
                     return "Processing", f"Merge completed recently. {pending_count} new stories pending."
         
-        return "Pending", f"{pending_count} stories waiting to be merged."
+        return "Pending", f"{pending_count} files waiting to be merged into dataset."
     except Exception as e:
         return "Error", f"Error determining status: {str(e)}"
 
@@ -131,8 +189,7 @@ def upload_jsonl_to_pending(story: str):
         timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
         payload = {
             "story": story.strip(),
-            "timestamp_utc": timestamp,
-            "status": "pending"  # Add status flag for tracking
+            "timestamp_utc": timestamp
         }
     except Exception as e:
         st.error(f"Failed to initialize Hugging Face API: {str(e)}")
@@ -157,7 +214,7 @@ refresh_clicked = st.button("🔄 Refresh Status", key="refresh_status")
 if refresh_clicked or 'pending_count' not in st.session_state:
     with st.spinner("Fetching status information..."):
         st.session_state.pending_count = get_pending_stories_count()
-        st.session_state.last_merge = get_last_merge_timestamp()
+        st.session_state.last_merge, st.session_state.last_merge_error = get_last_merge_timestamp()
         st.session_state.merge_status, st.session_state.merge_message = get_merge_status()
 
 # Use columns for better layout
@@ -168,6 +225,10 @@ with col1:
     pending_count = st.session_state.get('pending_count')
     if pending_count is not None:
         st.metric("Count", pending_count)
+        if pending_count == 0:
+            st.caption("No files waiting to merge")
+        else:
+            st.caption("Files in pending/ directory")
     else:
         st.error("Unable to fetch pending count")
         st.caption("Check your Hugging Face token and repository access")
@@ -175,6 +236,8 @@ with col1:
 with col2:
     st.subheader("Last Merge")
     last_merge = st.session_state.get('last_merge')
+    last_merge_error = st.session_state.get('last_merge_error')
+    
     if last_merge:
         if isinstance(last_merge, datetime):
             # Normalize timezone
@@ -199,8 +262,26 @@ with col2:
         else:
             st.metric("Timestamp", str(last_merge))
     else:
-        st.info("No merge found")
-        st.caption("Merge history may not be available")
+        # Show error message if available, otherwise generic message
+        if last_merge_error:
+            if "No merge commits found" in last_merge_error:
+                st.info("No merges yet")
+                st.caption("No merge commits found in repository")
+            elif "Authentication" in last_merge_error or "401" in last_merge_error:
+                st.error("Auth Error")
+                st.caption(last_merge_error)
+            elif "403" in last_merge_error or "forbidden" in last_merge_error.lower():
+                st.warning("Access Denied")
+                st.caption(last_merge_error)
+            elif "404" in last_merge_error or "not found" in last_merge_error.lower():
+                st.warning("Not Found")
+                st.caption(last_merge_error)
+            else:
+                st.warning("Error")
+                st.caption(last_merge_error)
+        else:
+            st.info("No merge found")
+            st.caption("Merge history may not be available")
 
 with col3:
     st.subheader("Merge Status")
@@ -217,6 +298,15 @@ with col3:
         st.error(f"❌ {status}")
     
     st.caption(message)
+
+# Debug information (expandable)
+if st.session_state.get('last_merge_error'):
+    with st.expander("🔍 Debug Information", expanded=False):
+        st.write("**Last Merge Error:**")
+        st.code(st.session_state.get('last_merge_error', 'No error recorded'))
+        if st.button("Clear Error", key="clear_error"):
+            st.session_state.last_merge_error = None
+            st.rerun()
 
 st.divider()
 
