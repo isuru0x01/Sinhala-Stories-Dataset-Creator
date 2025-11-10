@@ -1,9 +1,7 @@
 # merge_pending_into_main.py
 import os
-import glob
-import json
 import tempfile
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import HfApi, hf_hub_download, CommitOperationDelete
 from datasets import load_dataset, Dataset, concatenate_datasets
 from datetime import datetime
 
@@ -13,6 +11,20 @@ REPO_ID = "Isuru0x01/sinhala_stories"
 REPO_TYPE = "dataset"
 PENDING_DIR = "pending"   # remote repo path where small jsonl files are stored
 
+# Validate and strip token
+if not HF_TOKEN:
+    raise ValueError(
+        "HF_TOKEN environment variable is not set. "
+        "Please set it in your GitHub repository secrets or environment."
+    )
+HF_TOKEN = HF_TOKEN.strip()
+if not HF_TOKEN:
+    raise ValueError(
+        "HF_TOKEN environment variable is empty (only whitespace). "
+        "Please set a valid Hugging Face token in your GitHub repository secrets."
+    )
+
+# Initialize API with validated token
 api = HfApi(token=HF_TOKEN)
 
 def list_repo_files():
@@ -45,7 +57,7 @@ def load_pending_datasets(local_files):
 def merge_and_push(pending_ds, pending_files):
     # Load current main dataset fully (this will download shards - ensure you have disk/memory)
     print("Loading main dataset (this may be large)...")
-    main_ds = load_dataset(REPO_ID, split="train", use_auth_token=HF_TOKEN)
+    main_ds = load_dataset(REPO_ID, split="train", token=HF_TOKEN)
     print("Main dataset loaded. Size:", len(main_ds))
     if pending_ds is None or len(pending_ds) == 0:
         print("No pending items to merge.")
@@ -68,11 +80,8 @@ def merge_and_push(pending_ds, pending_files):
     # Clean up processed pending files
     print("Cleaning up processed pending files...")
     cleanup_operations = []
-    for file_path in pending:
-        cleanup_operations.append({
-            "operation": "delete",
-            "path": file_path
-        })
+    for file_path in pending_files:
+        cleanup_operations.append(CommitOperationDelete(path_in_repo=file_path))
     
     if cleanup_operations:
         api.create_commit(
