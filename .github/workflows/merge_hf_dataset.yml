@@ -1,0 +1,27 @@
+name: Merge Pending Hugging Face Dataset
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # every 15 minutes
+  workflow_dispatch:        # allows manual trigger
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          pip install huggingface_hub datasets
+
+      - name: Run merge script
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python merge_pending_into_main.py
