@@ -2,7 +2,7 @@
 import os
 import tempfile
 from huggingface_hub import HfApi, hf_hub_download, CommitOperationDelete
-from datasets import load_dataset, Dataset, concatenate_datasets
+from datasets import load_dataset, Dataset, concatenate_datasets, Features, Value
 from datetime import datetime
 
 # CONFIG - set HF_TOKEN in environment or replace below (prefer env var)
@@ -42,6 +42,47 @@ def download_file(filename, outdir):
         w.write(r.read())
     return target
 
+def align_dataset_schemas(datasets):
+    if not datasets:
+        return []
+    
+    # 1. Collect union of all features
+    all_features = {}
+    for ds in datasets:
+        for col_name, feature in ds.features.items():
+            if col_name not in all_features:
+                all_features[col_name] = feature
+                
+    # Define the target features schema
+    target_features = Features(all_features)
+    
+    aligned_datasets = []
+    for ds in datasets:
+        missing_cols = set(all_features.keys()) - set(ds.column_names)
+        if not missing_cols:
+            # Just cast to ensure the exact same feature types (e.g. string, float, etc.)
+            aligned_datasets.append(ds.cast(target_features))
+            continue
+            
+        def add_missing_keys(batch):
+            # batch is a dict mapping column name -> list of values
+            first_key = list(batch.keys())[0]
+            batch_size = len(batch[first_key])
+            for col in missing_cols:
+                batch[col] = [None] * batch_size
+            return batch
+            
+        aligned_ds = ds.map(
+            add_missing_keys,
+            batched=True,
+            features=target_features,
+            desc="Aligning schemas",
+            keep_in_memory=True
+        )
+        aligned_datasets.append(aligned_ds)
+        
+    return aligned_datasets
+
 def load_pending_datasets(local_files):
     datasets = []
     for f in local_files:
@@ -52,9 +93,12 @@ def load_pending_datasets(local_files):
         return None
     if len(datasets) == 1:
         return datasets[0]
-    return concatenate_datasets(datasets, axis=0)
+    
+    # Align schemas of all pending datasets
+    aligned = align_dataset_schemas(datasets)
+    return concatenate_datasets(aligned, axis=0)
 
-def merge_and_push(pending_ds, pending_files):
+def merge_and_push(pending_ds, pending_files, start_time):
     # Load current main dataset fully (this will download shards - ensure you have disk/memory)
     print("Loading main dataset (this may be large)...")
     main_ds = load_dataset(REPO_ID, split="train", token=HF_TOKEN)
@@ -64,8 +108,13 @@ def merge_and_push(pending_ds, pending_files):
         return
 
     print("Pending entries size:", len(pending_ds))
+    
+    # Align schemas of main_ds and pending_ds
+    print("Aligning schemas between main and pending datasets...")
+    aligned = align_dataset_schemas([main_ds, pending_ds])
+    
     # Concatenate
-    merged = concatenate_datasets([main_ds, pending_ds])
+    merged = concatenate_datasets(aligned)
     print("Merged dataset size:", len(merged))
 
     # Optionally deduplicate here if you want (not included)
@@ -77,22 +126,37 @@ def merge_and_push(pending_ds, pending_files):
     merged.push_to_hub(REPO_ID, token=HF_TOKEN, commit_message=commit_msg)
     print("Push complete.")
     
-    # Clean up processed pending files
-    print("Cleaning up processed pending files...")
+    duration = time.time() - start_time
+    
+    # Clean up processed pending files and add stats
+    print("Cleaning up processed pending files and writing merge_stats.json...")
     cleanup_operations = []
     for file_path in pending_files:
         cleanup_operations.append(CommitOperationDelete(path_in_repo=file_path))
+    
+    # Create merge stats
+    stats = {
+        "last_merge_timestamp": ts,
+        "duration_seconds": duration,
+        "merged_entries_count": len(pending_ds)
+    }
+    from huggingface_hub import CommitOperationAdd
+    import io
+    buf_stats = io.BytesIO(json.dumps(stats, indent=2).encode("utf-8"))
+    cleanup_operations.append(CommitOperationAdd(path_in_repo="merge_stats.json", path_or_fileobj=buf_stats))
     
     if cleanup_operations:
         api.create_commit(
             repo_id=REPO_ID,
             repo_type=REPO_TYPE,
             operations=cleanup_operations,
-            commit_message=f"Cleanup processed pending files ({ts})"
+            commit_message=f"Cleanup processed pending files & update merge stats ({ts})"
         )
-        print(f"Cleaned up {len(cleanup_operations)} pending files.")
+        print(f"Cleaned up pending files and updated merge_stats.json. Duration: {duration:.2f}s")
 
 def main():
+    import time
+    start_time = time.time()
     files = list_repo_files()
     pending = list_pending_files(files)
     if not pending:
@@ -113,7 +177,7 @@ def main():
         return
 
     # Do the merge and push
-    merge_and_push(pending_ds, pending)
+    merge_and_push(pending_ds, pending, start_time)
 
 if __name__ == "__main__":
     main()
