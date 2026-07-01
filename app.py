@@ -25,8 +25,10 @@ st.title("📚 Sinhala Story Submission — Safe Append")
 # Core Utilities
 
 def normalize_story(story: str) -> str:
-    """Performs Unicode NFC normalization, trims whitespace, and collapses multiple spaces."""
+    """Performs Unicode NFC normalization, collapses multiple dots, trims whitespace, and collapses multiple spaces."""
     normalized = unicodedata.normalize("NFC", story)
+    # Collapse multiple consecutive dots into a single dot
+    normalized = re.sub(r'\.{2,}', '.', normalized)
     normalized = normalized.strip()
     normalized = re.sub(r'\s+', ' ', normalized)
     return normalized
