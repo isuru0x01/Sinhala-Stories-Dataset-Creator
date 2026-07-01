@@ -117,7 +117,91 @@ def merge_and_push(pending_ds, pending_files, start_time):
     merged = concatenate_datasets(aligned)
     print("Merged dataset size:", len(merged))
 
-    # Optionally deduplicate here if you want (not included)
+    # Add/Update SHA-256 hashes inside the dataset if missing
+    import hashlib
+    import unicodedata
+    import re
+    from datetime import timezone
+    import numpy as np
+
+    def normalize_story_local(story):
+        if not story:
+            return ""
+        normalized = unicodedata.normalize("NFC", story)
+        normalized = re.sub(r'\.{2,}', '.', normalized)
+        normalized = normalized.strip()
+        normalized = re.sub(r'\s+', ' ', normalized)
+        return normalized
+
+    print("Checking and populating SHA-256 hashes...")
+    stories = merged["story"]
+    has_sha = "sha256" in merged.column_names
+    sha256s = merged["sha256"] if has_sha else [None] * len(merged)
+    
+    updated_sha256s = []
+    for s, h in zip(stories, sha256s):
+        if h:
+            updated_sha256s.append(h)
+        else:
+            norm_s = normalize_story_local(s)
+            h_new = hashlib.sha256(norm_s.encode('utf-8')).hexdigest()
+            updated_sha256s.append(h_new)
+
+    if "sha256" in merged.column_names:
+        merged = merged.remove_columns("sha256")
+    merged = merged.add_column("sha256", updated_sha256s)
+
+    # Compute dataset statistics
+    print("Computing dataset statistics...")
+    lengths = [len(s) for s in stories if s]
+    total_stories = len(merged)
+    total_size_chars = sum(lengths) if lengths else 0
+    avg_len = float(np.mean(lengths)) if lengths else 0.0
+    median_len = float(np.median(lengths)) if lengths else 0.0
+    longest_len = int(max(lengths)) if lengths else 0
+
+    now = datetime.now(timezone.utc)
+    today_count = 0
+    week_count = 0
+    contributors = set()
+
+    for row in merged:
+        ts_str = row.get("timestamp_utc")
+        if ts_str:
+            try:
+                if 'T' in ts_str:
+                    dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                else:
+                    dt = datetime.strptime(ts_str, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+                
+                time_diff = now - dt
+                if time_diff.days == 0:
+                    today_count += 1
+                if time_diff.days < 7:
+                    week_count += 1
+            except Exception:
+                pass
+        
+        session_hash = row.get("contributor_session_hash")
+        if session_hash:
+            contributors.add(session_hash)
+        else:
+            contributors.add(row.get("timestamp_utc", "")[:13])
+            
+    approx_contributors = len(contributors) if contributors else 0
+
+    dataset_stats = {
+        "total_stories": total_stories,
+        "total_size_chars": total_size_chars,
+        "avg_len": avg_len,
+        "median_len": median_len,
+        "longest_len": longest_len,
+        "today_count": today_count,
+        "week_count": week_count,
+        "approx_contributors": approx_contributors
+    }
+
+    hashes_txt_content = "\n".join(updated_sha256s) + "\n"
 
     # Push merged dataset as a new commit (this will replace dataset files on main with new shards)
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
@@ -129,7 +213,7 @@ def merge_and_push(pending_ds, pending_files, start_time):
     duration = time.time() - start_time
     
     # Clean up processed pending files and add stats
-    print("Cleaning up processed pending files and writing merge_stats.json...")
+    print("Cleaning up processed pending files and writing metadata files...")
     cleanup_operations = []
     for file_path in pending_files:
         cleanup_operations.append(CommitOperationDelete(path_in_repo=file_path))
@@ -142,17 +226,27 @@ def merge_and_push(pending_ds, pending_files, start_time):
     }
     from huggingface_hub import CommitOperationAdd
     import io
+    
+    # 1. merge_stats.json
     buf_stats = io.BytesIO(json.dumps(stats, indent=2).encode("utf-8"))
     cleanup_operations.append(CommitOperationAdd(path_in_repo="merge_stats.json", path_or_fileobj=buf_stats))
+
+    # 2. dataset_stats.json
+    buf_ds_stats = io.BytesIO(json.dumps(dataset_stats, indent=2).encode("utf-8"))
+    cleanup_operations.append(CommitOperationAdd(path_in_repo="dataset_stats.json", path_or_fileobj=buf_ds_stats))
+
+    # 3. hashes.txt
+    buf_hashes = io.BytesIO(hashes_txt_content.encode("utf-8"))
+    cleanup_operations.append(CommitOperationAdd(path_in_repo="hashes.txt", path_or_fileobj=buf_hashes))
     
     if cleanup_operations:
         api.create_commit(
             repo_id=REPO_ID,
             repo_type=REPO_TYPE,
             operations=cleanup_operations,
-            commit_message=f"Cleanup processed pending files & update merge stats ({ts})"
+            commit_message=f"Cleanup processed pending files & update stats/hashes ({ts})"
         )
-        print(f"Cleaned up pending files and updated merge_stats.json. Duration: {duration:.2f}s")
+        print(f"Cleaned up pending files and updated metadata files. Duration: {duration:.2f}s")
 
 def main():
     import time

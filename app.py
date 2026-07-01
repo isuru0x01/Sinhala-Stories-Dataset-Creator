@@ -282,32 +282,20 @@ def load_merge_stats():
         return None
 
 @st.cache_data(ttl=300)
-def get_main_dataset_hashes_and_stories():
-    """Loads the main dataset and extracts exact hashes and word sets for duplicate checking."""
-    hashes = set()
-    stories_data = []
-    
-    start_time = time.time()
+def get_main_dataset_hashes():
+    """Loads hashes.txt from Hugging Face repository containing all story SHA-256 fingerprints."""
     try:
-        ds = load_dataset(DATASET_REPO, split="train", token=HUGGINGFACE_TOKEN)
-        api_latency = time.time() - start_time
-        log_performance(0.0, api_latency)
-        
-        has_sha = "sha256" in ds.column_names
-        
-        for row in ds:
-            story = row.get("story", "")
-            if not story:
-                continue
-            h = row.get("sha256") if has_sha else None
-            if not h:
-                h = compute_sha256(normalize_story(story))
-            hashes.add(h)
-            stories_data.append((get_words(story), h))
+        local_path = hf_hub_download(
+            repo_id=DATASET_REPO,
+            filename="hashes.txt",
+            repo_type="dataset",
+            token=HUGGINGFACE_TOKEN
+        )
+        with open(local_path, "r", encoding="utf-8") as f:
+            return set(line.strip() for line in f if line.strip())
     except Exception as e:
-        log_error(f"Failed to load main dataset: {str(e)}", traceback.format_exc(), 0)
-        
-    return hashes, stories_data
+        log_error(f"Failed to load hashes.txt: {str(e)}", traceback.format_exc(), 0)
+        return set()
 
 @st.cache_data(ttl=30)
 def list_pending_filenames():
@@ -334,15 +322,28 @@ def check_duplicate(normalized_story: str) -> tuple[bool, str]:
         if len(parts) >= 3 and parts[2].lower() == new_hash_prefix.lower():
             return True, "❌ Story is identical to a pending story awaiting merge."
             
+        # Optional near-duplicate check against pending stories
+        try:
+            local_path = hf_hub_download(
+                repo_id=DATASET_REPO,
+                filename=pf,
+                repo_type="dataset",
+                token=HUGGINGFACE_TOKEN
+            )
+            with open(local_path, "r", encoding="utf-8") as f:
+                data = json.loads(f.read().strip())
+                pending_story = data.get("story", "")
+                if pending_story:
+                    sim = jaccard_similarity(new_words, get_words(pending_story))
+                    if sim > 0.85:
+                        return True, f"❌ Story is extremely similar to a pending story awaiting merge (Near-duplicate, similarity: {sim:.1%})."
+        except Exception:
+            pass
+            
     # 2. Check main dataset
-    main_hashes, main_stories = get_main_dataset_hashes_and_stories()
+    main_hashes = get_main_dataset_hashes()
     if new_hash in main_hashes:
         return True, "❌ Story already exists in the dataset (Exact duplicate)."
-        
-    for existing_words, h in main_stories:
-        sim = jaccard_similarity(new_words, existing_words)
-        if sim > 0.85:
-            return True, f"❌ Story is extremely similar to an existing story (Near-duplicate, similarity: {sim:.1%})."
             
     return False, ""
 
@@ -676,67 +677,20 @@ def upload_jsonl_to_pending(story: str, consent_given: bool, adult: bool, violen
         else:
             raise e
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=60)
 def calculate_dataset_stats():
-    """Computes high-level analytics over the merged main dataset."""
+    """Retrieves high-level analytics over the merged main dataset from dataset_stats.json."""
     try:
-        ds = load_dataset(DATASET_REPO, split="train", token=HUGGINGFACE_TOKEN)
-        total_stories = len(ds)
-        
-        lengths = [len(row.get("story", "")) for row in ds]
-        if lengths:
-            total_size_chars = sum(lengths)
-            avg_len = float(np.mean(lengths))
-            median_len = float(np.median(lengths))
-            longest_len = int(max(lengths))
-        else:
-            total_size_chars = 0
-            avg_len = 0.0
-            median_len = 0.0
-            longest_len = 0
-            
-        now = datetime.now(timezone.utc)
-        today_count = 0
-        week_count = 0
-        contributors = set()
-        
-        for row in ds:
-            ts_str = row.get("timestamp_utc")
-            if ts_str:
-                try:
-                    if 'T' in ts_str:
-                        dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
-                    else:
-                        dt = datetime.strptime(ts_str, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
-                    
-                    time_diff = now - dt
-                    if time_diff.days == 0:
-                        today_count += 1
-                    if time_diff.days < 7:
-                        week_count += 1
-                except Exception:
-                    pass
-            
-            session_hash = row.get("contributor_session_hash")
-            if session_hash:
-                contributors.add(session_hash)
-            else:
-                contributors.add(row.get("timestamp_utc", "")[:13]) # Fallback proxy grouping
-                
-        approx_contributors = len(contributors) if contributors else 0
-        
-        return {
-            "total_stories": total_stories,
-            "total_size_chars": total_size_chars,
-            "avg_len": avg_len,
-            "median_len": median_len,
-            "longest_len": longest_len,
-            "today_count": today_count,
-            "week_count": week_count,
-            "approx_contributors": approx_contributors
-        }
+        local_path = hf_hub_download(
+            repo_id=DATASET_REPO,
+            filename="dataset_stats.json",
+            repo_type="dataset",
+            token=HUGGINGFACE_TOKEN
+        )
+        with open(local_path, "r", encoding="utf-8") as f:
+            return json.loads(f.read().strip())
     except Exception as e:
-        log_error(f"Failed to calculate dataset stats: {str(e)}", traceback.format_exc(), 0)
+        log_error(f"Failed to load dataset_stats.json: {str(e)}", traceback.format_exc(), 0)
         return None
 
 def display_story_stats(text: str):
