@@ -283,7 +283,7 @@ def load_merge_stats():
 
 @st.cache_data(ttl=300)
 def get_main_dataset_hashes():
-    """Loads hashes.txt from Hugging Face repository containing all story SHA-256 fingerprints."""
+    """Loads hashes.txt, falling back to on-the-fly calculation if missing."""
     try:
         local_path = hf_hub_download(
             repo_id=DATASET_REPO,
@@ -293,9 +293,24 @@ def get_main_dataset_hashes():
         )
         with open(local_path, "r", encoding="utf-8") as f:
             return set(line.strip() for line in f if line.strip())
-    except Exception as e:
-        log_error(f"Failed to load hashes.txt: {str(e)}", traceback.format_exc(), 0)
-        return set()
+    except Exception:
+        # Fallback to computing hashes from loading dataset (helps during transition)
+        try:
+            ds = load_dataset(DATASET_REPO, split="train", token=HUGGINGFACE_TOKEN)
+            has_sha = "sha256" in ds.column_names
+            hashes = set()
+            for row in ds:
+                story = row.get("story", "")
+                if not story:
+                    continue
+                h = row.get("sha256") if has_sha else None
+                if not h:
+                    h = compute_sha256(normalize_story(story))
+                hashes.add(h)
+            return hashes
+        except Exception as e:
+            log_error(f"Fallback hashes calculation failed: {str(e)}", traceback.format_exc(), 0)
+            return set()
 
 @st.cache_data(ttl=30)
 def list_pending_filenames():
@@ -679,7 +694,7 @@ def upload_jsonl_to_pending(story: str, consent_given: bool, adult: bool, violen
 
 @st.cache_data(ttl=60)
 def calculate_dataset_stats():
-    """Retrieves high-level analytics over the merged main dataset from dataset_stats.json."""
+    """Retrieves stats from dataset_stats.json, falling back to on-the-fly calculation if missing."""
     try:
         local_path = hf_hub_download(
             repo_id=DATASET_REPO,
@@ -689,9 +704,61 @@ def calculate_dataset_stats():
         )
         with open(local_path, "r", encoding="utf-8") as f:
             return json.loads(f.read().strip())
-    except Exception as e:
-        log_error(f"Failed to load dataset_stats.json: {str(e)}", traceback.format_exc(), 0)
-        return None
+    except Exception:
+        # Fallback to on-the-fly calculation (helps during transition phase)
+        try:
+            ds = load_dataset(DATASET_REPO, split="train", token=HUGGINGFACE_TOKEN)
+            total_stories = len(ds)
+            lengths = [len(row.get("story", "")) for row in ds]
+            if lengths:
+                total_size_chars = sum(lengths)
+                avg_len = float(np.mean(lengths))
+                median_len = float(np.median(lengths))
+                longest_len = int(max(lengths))
+            else:
+                total_size_chars = 0
+                avg_len = 0.0
+                median_len = 0.0
+                longest_len = 0
+                
+            now = datetime.now(timezone.utc)
+            today_count = 0
+            week_count = 0
+            contributors = set()
+            for row in ds:
+                ts_str = row.get("timestamp_utc")
+                if ts_str:
+                    try:
+                        if 'T' in ts_str:
+                            dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                        else:
+                            dt = datetime.strptime(ts_str, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+                        time_diff = now - dt
+                        if time_diff.days == 0:
+                            today_count += 1
+                        if time_diff.days < 7:
+                            week_count += 1
+                    except Exception:
+                        pass
+                session_hash = row.get("contributor_session_hash")
+                if session_hash:
+                    contributors.add(session_hash)
+                else:
+                    contributors.add(row.get("timestamp_utc", "")[:13])
+            approx_contributors = len(contributors) if contributors else 0
+            return {
+                "total_stories": total_stories,
+                "total_size_chars": total_size_chars,
+                "avg_len": avg_len,
+                "median_len": median_len,
+                "longest_len": longest_len,
+                "today_count": today_count,
+                "week_count": week_count,
+                "approx_contributors": approx_contributors
+            }
+        except Exception as e:
+            log_error(f"Fallback dataset stats calculation failed: {str(e)}", traceback.format_exc(), 0)
+            return None
 
 def display_story_stats(text: str):
     """Renders character-level analytics and reading metrics for the submitted story."""
