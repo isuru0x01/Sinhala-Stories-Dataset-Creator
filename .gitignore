@@ -1,1 +1,26 @@
+# Streamlit configuration
 .streamlit/
+
+# Python Virtual Environment
+sinhala_dataset_creator/
+venv/
+ENV/
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Application Data & Logs
+local_queue/
+logs/
+*.log
+
+# Sensitive Key Material
+my-secret-key.asc
+*.asc
+*.key
+*.pem
+*.pub
+*.gpg
