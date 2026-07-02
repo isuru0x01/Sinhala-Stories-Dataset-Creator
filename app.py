@@ -201,7 +201,7 @@ def log_error(error_msg: str, traceback_str: str, submission_size: int):
     ip_addr = get_client_ip()
     ip_hash = hashlib.sha256(ip_addr.encode('utf-8')).hexdigest()[:8]
     log_entry = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "ip_hash": ip_hash,
         "error": error_msg,
         "submission_size": submission_size,
@@ -217,7 +217,7 @@ def log_performance(upload_time: float, api_latency: float):
     """Logs upload performance and API latency metrics."""
     os.makedirs("logs", exist_ok=True)
     perf_entry = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "upload_time": upload_time,
         "api_latency": api_latency
     }
@@ -401,7 +401,7 @@ def process_local_queue() -> int:
                 continue
                 
             payload = json.loads(content)
-            timestamp = payload.get("timestamp_utc", datetime.utcnow().strftime("%Y%m%dT%H%M%SZ"))
+            timestamp = payload.get("timestamp_utc", datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
             submission_id = payload.get("submission_id", "unknown")
             sha_prefix = payload.get("sha256", "00000000")[:8]
             
@@ -588,7 +588,8 @@ def get_merge_status():
         if last_merge:
             now = datetime.now(timezone.utc)
             if isinstance(last_merge, datetime):
-                time_diff = (now - last_merge.replace(tzinfo=timezone.utc) if last_merge.tzinfo is None else last_merge).total_seconds()
+                last_merge_utc = last_merge.replace(tzinfo=timezone.utc) if last_merge.tzinfo is None else last_merge
+                time_diff = (now - last_merge_utc).total_seconds()
                 if time_diff < 3600:
                     return "Processing", f"Merge completed recently. {pending_count} new stories pending."
         
@@ -600,8 +601,9 @@ def upload_jsonl_to_pending(story: str, consent_given: bool, adult: bool, violen
     """Enriches the story metadata, generates a submission ID, and commits to Hugging Face or queues locally."""
     # 1. Normalize
     normalized = normalize_story(story)
-    timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    date_str = datetime.utcnow().strftime("%Y%m%d")
+    now_utc = datetime.now(timezone.utc)
+    timestamp = now_utc.strftime("%Y%m%dT%H%M%SZ")
+    date_str = now_utc.strftime("%Y%m%d")
     
     # 2. Generate submission_id and session_id (for contributor session tracking)
     if "session_id" not in st.session_state:

@@ -5,7 +5,7 @@ import time
 import json
 from huggingface_hub import HfApi, hf_hub_download, CommitOperationDelete
 from datasets import load_dataset, Dataset, concatenate_datasets, Features, Value
-from datetime import datetime
+from datetime import datetime, timezone
 
 # CONFIG - set HF_TOKEN in environment or replace below (prefer env var)
 HF_TOKEN = os.environ.get("HF_TOKEN")  # or set string directly (not recommended)
@@ -246,8 +246,9 @@ def merge_and_push(pending_ds, pending_files, start_time):
         cleanup_operations.append(CommitOperationAdd(path_in_repo="dataset_stats.json", path_or_fileobj=buf_ds_stats))
 
         # Add merge_stats.json
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         stats = {
-            "last_merge_timestamp": datetime.utcnow().strftime("%Y%m%dT%H%M%SZ"),
+            "last_merge_timestamp": ts,
             "duration_seconds": duration,
             "merged_entries_count": new_stories_count
         }
@@ -255,7 +256,6 @@ def merge_and_push(pending_ds, pending_files, start_time):
         cleanup_operations.append(CommitOperationAdd(path_in_repo="merge_stats.json", path_or_fileobj=buf_stats))
         
         if cleanup_operations:
-            ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
             api.create_commit(
                 repo_id=REPO_ID,
                 repo_type=REPO_TYPE,
