@@ -1,0 +1,75 @@
+flowchart TB
+    %% Direction: Top to Bottom with 3 structured subgraphs
+
+    subgraph Client ["1. Client Submission Interface (Streamlit App)"]
+        direction TB
+        C1["Contributor Sinhala Text Entry<br/>- Raw text input & reading telemetry<br/>- Informed consent & safety flags"]
+        
+        C2["Multi-Tier Pre-Validation Gate<br/>- Unicode NFC normalization<br/>- Character bounds: 50 to 50,000 chars<br/>- Sinhala script ratio verification<br/>- AI-generated text suspicion heuristics"]
+        
+        C3{"Deduplication Screening"}
+        C3_Exact["Exact Match Check<br/>SHA-256 vs repository hashes.txt"]
+        C3_Near["Near-Duplicate Check<br/>Jaccard similarity vs pending entries"]
+        
+        C4["Metadata Enrichment & Packaging<br/>- Generate ID: SLS-YYYYMMDD-HEX<br/>- UTC timestamp & SHA-256 hash<br/>- Contributor session hash<br/>- Encode single-entry JSONL"]
+        
+        C5["Fault-Tolerant Local Queue<br/>Offline local disk buffer<br/>(Auto-replayed on reconnection)"]
+
+        C1 --> C2
+        C2 --> C3
+        C3 -->|Hash check| C3_Exact
+        C3 -->|Lexical check| C3_Near
+        C3_Exact -->|Passed| C4
+        C3_Near -->|Passed| C4
+        C4 -.->|On network failure| C5
+    end
+
+    subgraph Queue ["2. Fault-Tolerant Staged File Queue (Hugging Face Hub)"]
+        direction TB
+        Q_Info["Conflict-Free Ingestion Architecture<br/>- Zero concurrent write conflicts<br/>- Decoupled from core dataset size<br/>- Client write latency under 1 second"]
+        
+        subgraph StagingDir ["Remote Directory: pending/"]
+            Q1[("entry_20260901_a1f4_01.jsonl<br/>Atomic micro-commit: Submission 1")]
+            Q2[("entry_20260901_b7c2_02.jsonl<br/>Atomic micro-commit: Submission 2")]
+            Q3[("entry_20260901_e9d8_03.jsonl<br/>Atomic micro-commit: Submission 3")]
+            Q_Dots["... (Concurrent pending records)"]
+        end
+
+        Q_Info --- StagingDir
+    end
+
+    subgraph Merge ["3. Automated Merge Workflow (GitHub Actions & Hugging Face Hub)"]
+        direction TB
+        M1["Scheduled Batch Ingestion<br/>- Cron execution: every 5 minutes<br/>- Batch-downloads all pending/*.jsonl files<br/>- Dynamic schema alignment & casting"]
+        
+        M2["Optimised Incremental Merge<br/>- Loads secondary train-append.parquet<br/>- Bypasses 10.9M+ row core master dataset<br/>- Lightweight execution: duration under 15s"]
+        
+        M3["Metadata & Hash Index Sync<br/>- Appends SHA-256 hashes to hashes.txt<br/>- Incremental stats: dataset_stats.json<br/>- Pipeline telemetry: merge_stats.json"]
+        
+        M4["Atomic Commit & Queue Purge<br/>Single atomic Git commit operation:<br/>1. Push updated Parquet, stats & hashes<br/>2. Delete merged pending/*.jsonl files<br/>(Zero data loss / No duplicate records)"]
+
+        M1 --> M2
+        M2 --> M3
+        M3 --> M4
+    end
+
+    %% Cross-Component Workflows
+    C4 ==>|Direct Hub Commit: api.create_commit| StagingDir
+    C5 -.->|Replay commit on reconnect| StagingDir
+    StagingDir ==>|Batch Download| M1
+    M4 -.->|Polls dataset_stats.json for live UI metrics| C1
+
+    %% Styling
+    classDef clientStyle fill:#EFF6FF,stroke:#1D4ED8,stroke-width:1.5px,color:#0F172A;
+    classDef queueStyle fill:#FFFBEB,stroke:#D97706,stroke-width:1.5px,color:#0F172A;
+    classDef mergeStyle fill:#ECFDF5,stroke:#059669,stroke-width:1.5px,color:#0F172A;
+    classDef fileStyle fill:#FFFFFF,stroke:#64748B,stroke-width:1px,color:#1E293B;
+    classDef alertStyle fill:#FEF2F2,stroke:#DC2626,stroke-width:1.2px,color:#991B1B;
+    classDef commitStyle fill:#FEF3C7,stroke:#B45309,stroke-width:1.5px,color:#78350F;
+
+    class C1,C2,C3,C3_Exact,C3_Near,C4 clientStyle;
+    class C5 alertStyle;
+    class Q_Info queueStyle;
+    class Q1,Q2,Q3,Q_Dots fileStyle;
+    class M1,M2,M3 mergeStyle;
+    class M4 commitStyle;

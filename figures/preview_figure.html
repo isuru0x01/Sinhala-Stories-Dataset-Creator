@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Figure 1: Pipeline Architecture (Mermaid Preview & Export)</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #f8fafc;
+      color: #0f172a;
+      margin: 0;
+      padding: 24px;
+    }
+    .header {
+      max-width: 1200px;
+      margin: 0 auto 20px auto;
+      background: white;
+      padding: 20px 28px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      border: 1px solid #e2e8f0;
+    }
+    h1 {
+      margin: 0 0 8px 0;
+      font-size: 20px;
+      color: #1e293b;
+    }
+    p {
+      margin: 0 0 16px 0;
+      font-size: 14px;
+      color: #475569;
+      line-height: 1.5;
+    }
+    .btn-group {
+      display: flex;
+      gap: 12px;
+    }
+    button {
+      background-color: #2563eb;
+      color: white;
+      border: none;
+      padding: 9px 18px;
+      font-size: 13px;
+      font-weight: 600;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+    button:hover {
+      background-color: #1d4ed8;
+    }
+    button.secondary {
+      background-color: #059669;
+    }
+    button.secondary:hover {
+      background-color: #047857;
+    }
+    .diagram-container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      border: 1px solid #e2e8f0;
+      display: flex;
+      justify-content: center;
+      overflow-x: auto;
+    }
+    .mermaid {
+      width: 100%;
+      min-width: 900px;
+    }
+    .legend-box {
+      max-width: 1200px;
+      margin: 20px auto 0 auto;
+      background: white;
+      padding: 20px 28px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      border: 1px solid #e2e8f0;
+      font-size: 13px;
+      line-height: 1.6;
+      color: #334155;
+    }
+    .legend-title {
+      font-weight: bold;
+      color: #0f172a;
+      margin-bottom: 6px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>Figure 1: Crowdsourced Sinhala Text Ingestion & Automated Merge Pipeline</h1>
+    <p>Conforms to F1000Research guidelines. All nodes are isolated with clear bounding margins to prevent text overlap.</p>
+    <div class="btn-group">
+      <button onclick="toggleMode('rgb')">Color Mode (RGB)</button>
+      <button class="secondary" onclick="toggleMode('grayscale')">Grayscale Mode</button>
+      <button style="background-color:#475569;" onclick="downloadSVG()">Download Vector SVG</button>
+      <button style="background-color:#0f172a;" onclick="downloadPNG(600)">Export 600 DPI PNG</button>
+    </div>
+  </div>
+
+  <div class="diagram-container" id="container">
+    <div class="mermaid" id="diagram">
+flowchart LR
+    %% Subgraph 1: Client Submission Interface
+    subgraph Client ["1. Client Submission Interface (Streamlit)"]
+        direction TB
+        C1["Contributor Sinhala Input<br/>- Raw text & telemetry<br/>- Consent & safety declarations"]
+        
+        C2["Pre-Validation Quality Gate<br/>- Unicode NFC normalization<br/>- Length bounds: 50 to 50k chars<br/>- Sinhala script ratio check<br/>- AI suspicion heuristics"]
+        
+        C3["Deduplication Screening<br/>- SHA-256 vs repository hashes.txt<br/>- Jaccard similarity vs pending"]
+        
+        C4["Metadata & Packaging<br/>- Unique ID: SLS-YYYYMMDD-HEX<br/>- UTC timestamp & hash<br/>- Session hash & tags<br/>- Serialized to isolated .jsonl"]
+        
+        C5["Local Resilient Queue<br/>- Offline local disk buffer<br/>- Replayed on reconnection"]
+
+        C1 --> C2
+        C2 --> C3
+        C3 --> C4
+        C4 -.->|Network failure| C5
+    end
+
+    %% Subgraph 2: Fault-Tolerant Staged File Queue
+    subgraph Queue ["2. Staged File Queue (Hugging Face Hub)"]
+        direction TB
+        Q_Info["Conflict-Free Architecture<br/>- Zero concurrent write conflicts<br/>- Decoupled from core dataset<br/>- Client commit latency &lt; 1s"]
+        
+        subgraph StagingDir ["Remote Buffer: pending/"]
+            Q1[("entry_...01.jsonl<br/>Submission 1")]
+            Q2[("entry_...02.jsonl<br/>Submission 2")]
+            Q3[("entry_...03.jsonl<br/>Submission 3")]
+            Q_Dots["... (Concurrent micro-files)"]
+        end
+
+        Q_Info --- StagingDir
+    end
+
+    %% Subgraph 3: Automated Merge Workflow
+    subgraph Merge ["3. Automated Merge Workflow (GitHub Actions)"]
+        direction TB
+        M1["Scheduled Batch Ingestion<br/>- Cron trigger: every 5 minutes<br/>- Batch-downloads pending/ files<br/>- Dynamic schema alignment"]
+        
+        M2["Incremental Parquet Merge<br/>- Appends to train-append.parquet<br/>- Bypasses 10.9M+ row core<br/>- Execution time &lt; 15s"]
+        
+        M3["Metadata &amp; Index Sync<br/>- Appends hashes to hashes.txt<br/>- Updates dataset_stats.json<br/>- Logs merge_stats.json"]
+        
+        M4["Atomic Commit &amp; Purge<br/>Single atomic Git commit:<br/>1. Push updated Parquet &amp; stats<br/>2. Delete merged pending/ files<br/>(Zero data loss / No duplicate records)"]
+
+        M1 --> M2
+        M2 --> M3
+        M3 --> M4
+    end
+
+    %% Pipeline Inter-Component Connections
+    C4 ==>|Direct atomic commit| StagingDir
+    C5 -.->|Auto-replay on reconnect| StagingDir
+    StagingDir ==>|Batch fetch| M1
+    M4 -.->|Telemetry feedback| C1
+
+    %% Styling classes
+    classDef clientStyle fill:#EFF6FF,stroke:#1D4ED8,stroke-width:1.5px,color:#0F172A;
+    classDef queueStyle fill:#FFFBEB,stroke:#D97706,stroke-width:1.5px,color:#0F172A;
+    classDef mergeStyle fill:#ECFDF5,stroke:#059669,stroke-width:1.5px,color:#0F172A;
+    classDef fileStyle fill:#FFFFFF,stroke:#64748B,stroke-width:1px,color:#1E293B;
+    classDef alertStyle fill:#FEF2F2,stroke:#DC2626,stroke-width:1.2px,color:#991B1B;
+    classDef commitStyle fill:#FEF3C7,stroke:#B45309,stroke-width:1.5px,color:#78350F;
+
+    class C1,C2,C3,C4 clientStyle;
+    class C5 alertStyle;
+    class Q_Info queueStyle;
+    class Q1,Q2,Q3,Q_Dots fileStyle;
+    class M1,M2,M3 mergeStyle;
+    class M4 commitStyle;
+    </div>
+  </div>
+
+  <div class="legend-box">
+    <div class="legend-title">Figure 1. Architecture of the three-component crowdsourced Sinhala text ingestion and automated merge pipeline.</div>
+    <div><strong>Legend:</strong> Schematic representation of the crowdsourced data collection and ingestion architecture designed for high-throughput, conflict-free Sinhala text dataset creation. (1) Client Submission Interface built with Streamlit handles text entry, Unicode NFC normalization, quality bounds, dual-tier deduplication, and packaging into isolated single-entry JSONL files with local offline buffering. (2) Fault-Tolerant Staged File Queue leverages remote Hugging Face Hub micro-commits in <code>pending/</code> to eliminate concurrent write conflicts. (3) Automated Merge Workflow orchestrated via scheduled GitHub Actions executes schema alignment, incremental append to Parquet, hash index synchronization, and an atomic commit-and-purge operation.</div>
+  </div>
+
+  <script>
+    const rgbDiagram = `flowchart LR
+    subgraph Client ["1. Client Submission Interface (Streamlit)"]
+        direction TB
+        C1["Contributor Sinhala Input<br/>- Raw text & telemetry<br/>- Consent & safety declarations"]
+        C2["Pre-Validation Quality Gate<br/>- Unicode NFC normalization<br/>- Length bounds: 50 to 50k chars<br/>- Sinhala script ratio check<br/>- AI suspicion heuristics"]
+        C3["Deduplication Screening<br/>- SHA-256 vs repository hashes.txt<br/>- Jaccard similarity vs pending"]
+        C4["Metadata & Packaging<br/>- Unique ID: SLS-YYYYMMDD-HEX<br/>- UTC timestamp & hash<br/>- Session hash & tags<br/>- Serialized to isolated .jsonl"]
+        C5["Local Resilient Queue<br/>- Offline local disk buffer<br/>- Replayed on reconnection"]
+        C1 --> C2
+        C2 --> C3
+        C3 --> C4
+        C4 -.->|Network failure| C5
+    end
+
+    subgraph Queue ["2. Staged File Queue (Hugging Face Hub)"]
+        direction TB
+        Q_Info["Conflict-Free Architecture<br/>- Zero concurrent write conflicts<br/>- Decoupled from core dataset<br/>- Client commit latency &lt; 1s"]
+        subgraph StagingDir ["Remote Buffer: pending/"]
+            Q1[("entry_...01.jsonl<br/>Submission 1")]
+            Q2[("entry_...02.jsonl<br/>Submission 2")]
+            Q3[("entry_...03.jsonl<br/>Submission 3")]
+            Q_Dots["... (Concurrent micro-files)"]
+        end
+        Q_Info --- StagingDir
+    end
+
+    subgraph Merge ["3. Automated Merge Workflow (GitHub Actions)"]
+        direction TB
+        M1["Scheduled Batch Ingestion<br/>- Cron trigger: every 5 minutes<br/>- Batch-downloads pending/ files<br/>- Dynamic schema alignment"]
+        M2["Incremental Parquet Merge<br/>- Appends to train-append.parquet<br/>- Bypasses 10.9M+ row core<br/>- Execution time &lt; 15s"]
+        M3["Metadata &amp; Index Sync<br/>- Appends hashes to hashes.txt<br/>- Updates dataset_stats.json<br/>- Logs merge_stats.json"]
+        M4["Atomic Commit &amp; Purge<br/>Single atomic Git commit:<br/>1. Push updated Parquet &amp; stats<br/>2. Delete merged pending/ files<br/>(Zero data loss / No duplicate records)"]
+        M1 --> M2
+        M2 --> M3
+        M3 --> M4
+    end
+
+    C4 ==>|Direct atomic commit| StagingDir
+    C5 -.->|Auto-replay on reconnect| StagingDir
+    StagingDir ==>|Batch fetch| M1
+    M4 -.->|Telemetry feedback| C1
+
+    classDef clientStyle fill:#EFF6FF,stroke:#1D4ED8,stroke-width:1.5px,color:#0F172A;
+    classDef queueStyle fill:#FFFBEB,stroke:#D97706,stroke-width:1.5px,color:#0F172A;
+    classDef mergeStyle fill:#ECFDF5,stroke:#059669,stroke-width:1.5px,color:#0F172A;
+    classDef fileStyle fill:#FFFFFF,stroke:#64748B,stroke-width:1px,color:#1E293B;
+    classDef alertStyle fill:#FEF2F2,stroke:#DC2626,stroke-width:1.2px,color:#991B1B;
+    classDef commitStyle fill:#FEF3C7,stroke:#B45309,stroke-width:1.5px,color:#78350F;
+
+    class C1,C2,C3,C4 clientStyle;
+    class C5 alertStyle;
+    class Q_Info queueStyle;
+    class Q1,Q2,Q3,Q_Dots fileStyle;
+    class M1,M2,M3 mergeStyle;
+    class M4 commitStyle;`;
+
+    const grayscaleDiagram = `flowchart LR
+    subgraph Client ["1. Client Submission Interface (Streamlit)"]
+        direction TB
+        C1["Contributor Sinhala Input<br/>- Raw text & telemetry<br/>- Consent & safety declarations"]
+        C2["Pre-Validation Quality Gate<br/>- Unicode NFC normalization<br/>- Length bounds: 50 to 50k chars<br/>- Sinhala script ratio check<br/>- AI suspicion heuristics"]
+        C3["Deduplication Screening<br/>- SHA-256 vs repository hashes.txt<br/>- Jaccard similarity vs pending"]
+        C4["Metadata & Packaging<br/>- Unique ID: SLS-YYYYMMDD-HEX<br/>- UTC timestamp & hash<br/>- Session hash & tags<br/>- Serialized to isolated .jsonl"]
+        C5["Local Resilient Queue<br/>- Offline local disk buffer<br/>- Replayed on reconnection"]
+        C1 --> C2
+        C2 --> C3
+        C3 --> C4
+        C4 -.->|Network failure| C5
+    end
+
+    subgraph Queue ["2. Staged File Queue (Hugging Face Hub)"]
+        direction TB
+        Q_Info["Conflict-Free Architecture<br/>- Zero concurrent write conflicts<br/>- Decoupled from core dataset<br/>- Client commit latency &lt; 1s"]
+        subgraph StagingDir ["Remote Buffer: pending/"]
+            Q1[("entry_...01.jsonl<br/>Submission 1")]
+            Q2[("entry_...02.jsonl<br/>Submission 2")]
+            Q3[("entry_...03.jsonl<br/>Submission 3")]
+            Q_Dots["... (Concurrent micro-files)"]
+        end
+        Q_Info --- StagingDir
+    end
+
+    subgraph Merge ["3. Automated Merge Workflow (GitHub Actions)"]
+        direction TB
+        M1["Scheduled Batch Ingestion<br/>- Cron trigger: every 5 minutes<br/>- Batch-downloads pending/ files<br/>- Dynamic schema alignment"]
+        M2["Incremental Parquet Merge<br/>- Appends to train-append.parquet<br/>- Bypasses 10.9M+ row core<br/>- Execution time &lt; 15s"]
+        M3["Metadata &amp; Index Sync<br/>- Appends hashes to hashes.txt<br/>- Updates dataset_stats.json<br/>- Logs merge_stats.json"]
+        M4["Atomic Commit &amp; Purge<br/>Single atomic Git commit:<br/>1. Push updated Parquet &amp; stats<br/>2. Delete merged pending/ files<br/>(Zero data loss / No duplicate records)"]
+        M1 --> M2
+        M2 --> M3
+        M3 --> M4
+    end
+
+    C4 ==>|Direct atomic commit| StagingDir
+    C5 -.->|Auto-replay on reconnect| StagingDir
+    StagingDir ==>|Batch fetch| M1
+    M4 -.->|Telemetry feedback| C1
+
+    classDef clientGray fill:#F8FAFC,stroke:#334155,stroke-width:1.5px,color:#0F172A;
+    classDef queueGray fill:#F1F5F9,stroke:#475569,stroke-width:1.5px,color:#0F172A;
+    classDef mergeGray fill:#E2E8F0,stroke:#1E293B,stroke-width:1.5px,color:#0F172A;
+    classDef fileGray fill:#FFFFFF,stroke:#64748B,stroke-width:1.2px,color:#0F172A;
+    classDef alertGray fill:#F8FAFC,stroke:#0F172A,stroke-width:1.5px,stroke-dasharray: 4 2,color:#0F172A;
+    classDef commitGray fill:#CBD5E1,stroke:#0F172A,stroke-width:1.8px,color:#0F172A;
+
+    class C1,C2,C3,C4 clientGray;
+    class C5 alertGray;
+    class Q_Info queueGray;
+    class Q1,Q2,Q3,Q_Dots fileGray;
+    class M1,M2,M3 mergeGray;
+    class M4 commitGray;`;
+
+    let currentMode = "rgb";
+
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'default',
+      flowchart: {
+        useMaxWidth: false,
+        htmlLabels: true,
+        curve: 'basis'
+      }
+    });
+
+    async function renderDiagram(code) {
+      const container = document.getElementById("diagram");
+      container.removeAttribute("data-processed");
+      container.innerHTML = code;
+      await mermaid.run({ nodes: [container] });
+    }
+
+    function toggleMode(mode) {
+      currentMode = mode;
+      renderDiagram(mode === 'rgb' ? rgbDiagram : grayscaleDiagram);
+    }
+
+    function downloadSVG() {
+      const svg = document.querySelector("#diagram svg");
+      const serializer = new XMLSerializer();
+      let source = serializer.serializeToString(svg);
+      if(!source.match(/^<svg[^>]+xmlns="http\:\/\/www\.w3\.org\/2000\/svg"/)){
+        source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+      }
+      const blob = new Blob([source], {type: "image/svg+xml;charset=utf-8"});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `figure1_pipeline_${currentMode}.svg`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function downloadPNG(dpi = 600) {
+      const svg = document.querySelector("#diagram svg");
+      const serializer = new XMLSerializer();
+      let source = serializer.serializeToString(svg);
+      const svgBlob = new Blob([source], {type: "image/svg+xml;charset=utf-8"});
+      const url = URL.createObjectURL(svgBlob);
+      const img = new Image();
+
+      img.onload = function() {
+        const scaleFactor = dpi / 96;
+        const canvas = document.createElement("canvas");
+        canvas.width = svg.getBoundingClientRect().width * scaleFactor;
+        canvas.height = svg.getBoundingClientRect().height * scaleFactor;
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.scale(scaleFactor, scaleFactor);
+        ctx.drawImage(img, 0, 0);
+
+        canvas.toBlob(function(blob) {
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = `figure1_pipeline_${currentMode}_${dpi}dpi.png`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        }, "image/png");
+        URL.revokeObjectURL(url);
+      };
+      img.src = url;
+    }
+  </script>
+</body>
+</html>

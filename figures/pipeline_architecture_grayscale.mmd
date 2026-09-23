@@ -1,0 +1,69 @@
+flowchart LR
+    %% Grayscale F1000Research Pipeline Architecture
+    subgraph Client ["1. Client Submission Interface (Streamlit)"]
+        direction TB
+        C1["<b>Contributor Text Entry</b><br/>• Raw Sinhala text & reading telemetry<br/>• Informed consent & safety flags"]
+        
+        C2["<b>Pre-Validation Quality Gate</b><br/>• Unicode NFC normalization<br/>• Length bounds: 50 to 50,000 chars<br/>• Script verification (Sinhala %)<br/>• AI suspicion heuristics"]
+        
+        C3["<b>Deduplication Screening</b><br/>• Exact SHA-256 vs repository hashes.txt<br/>• Jaccard lexical similarity vs pending"]
+        
+        C4["<b>Metadata Serialization</b><br/>• Unique ID: SLS-YYYYMMDD-HEX<br/>• UTC timestamp & SHA-256 hash<br/>• Contributor session hash<br/>• Serialized to isolated single-entry JSONL"]
+        
+        C5["<b>Local Resilient Queue</b><br/>• Offline local disk buffer<br/>• Auto-replayed upon reconnection"]
+
+        C1 --> C2
+        C2 --> C3
+        C3 --> C4
+        C4 -.->|Network failure fallback| C5
+    end
+
+    subgraph Queue ["2. Staged File Queue (Hugging Face Hub)"]
+        direction TB
+        Q_Info["<b>Decoupled Architecture</b><br/>• Zero concurrent write conflicts<br/>• No Git merge lock contention<br/>• Client commit latency &lt; 1s"]
+        
+        subgraph StagingDir ["Remote Buffer: pending/"]
+            Q1[("entry_...01.jsonl<br/>Submission 1")]
+            Q2[("entry_...02.jsonl<br/>Submission 2")]
+            Q3[("entry_...03.jsonl<br/>Submission 3")]
+            Q_Dots["... (Concurrent micro-files)"]
+        end
+
+        Q_Info --- StagingDir
+    end
+
+    subgraph Merge ["3. Automated Merge Workflow (GitHub Actions)"]
+        direction TB
+        M1["<b>Scheduled Batch Ingestion</b><br/>• Triggered every 5 min (cron)<br/>• Batch-downloads pending/*.jsonl files<br/>• Dynamic schema alignment & casting"]
+        
+        M2["<b>Incremental Parquet Merge</b><br/>• Appends to train-append.parquet<br/>• Bypasses 10.9M+ row core dataset<br/>• Fast execution: duration &lt; 15s"]
+        
+        M3["<b>Metadata &amp; Index Sync</b><br/>• Appends SHA-256 to hashes.txt<br/>• Updates dataset_stats.json<br/>• Logs telemetry to merge_stats.json"]
+        
+        M4["<b>Atomic Commit &amp; Purge</b><br/>Single atomic Git commit:<br/>1. Push updated Parquet, stats &amp; hashes<br/>2. Delete merged pending/*.jsonl files<br/><i>(Zero data loss / No duplicate records)</i>"]
+
+        M1 --> M2
+        M2 --> M3
+        M3 --> M4
+    end
+
+    %% Pipeline Inter-Component Flows
+    C4 ==>|Direct atomic commit: api.create_commit| StagingDir
+    C5 -.->|Replay commit on reconnect| StagingDir
+    StagingDir ==>|Batch fetch| M1
+    M4 -.->|Live dataset statistics poll| C1
+
+    %% High-Contrast Academic Grayscale Palette
+    classDef clientGray fill:#F8FAFC,stroke:#334155,stroke-width:1.5px,color:#0F172A;
+    classDef queueGray fill:#F1F5F9,stroke:#475569,stroke-width:1.5px,color:#0F172A;
+    classDef mergeGray fill:#E2E8F0,stroke:#1E293B,stroke-width:1.5px,color:#0F172A;
+    classDef fileGray fill:#FFFFFF,stroke:#64748B,stroke-width:1.2px,color:#0F172A;
+    classDef alertGray fill:#F8FAFC,stroke:#0F172A,stroke-width:1.5px,stroke-dasharray: 4 2,color:#0F172A;
+    classDef commitGray fill:#CBD5E1,stroke:#0F172A,stroke-width:1.8px,color:#0F172A;
+
+    class C1,C2,C3,C4 clientGray;
+    class C5 alertGray;
+    class Q_Info queueGray;
+    class Q1,Q2,Q3,Q_Dots fileGray;
+    class M1,M2,M3 mergeGray;
+    class M4 commitGray;
