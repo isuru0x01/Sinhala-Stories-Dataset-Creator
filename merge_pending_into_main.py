@@ -161,7 +161,8 @@ def merge_and_push(pending_ds, pending_files, start_time):
             repo_id=REPO_ID,
             filename="dataset_stats.json",
             repo_type="dataset",
-            token=HF_TOKEN
+            token=HF_TOKEN,
+            force_download=True
         )
         with open(stats_path, "r", encoding="utf-8") as f:
             dataset_stats = json.load(f)
@@ -211,7 +212,8 @@ def merge_and_push(pending_ds, pending_files, start_time):
                 repo_id=REPO_ID,
                 filename="hashes.txt",
                 repo_type="dataset",
-                token=HF_TOKEN
+                token=HF_TOKEN,
+                force_download=True
             )
         except Exception:
             hashes_path = None

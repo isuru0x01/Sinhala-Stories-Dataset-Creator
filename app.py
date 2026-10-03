@@ -266,17 +266,22 @@ def get_api():
     return HfApi(token=HUGGINGFACE_TOKEN)
 
 @st.cache_data(ttl=60)
+def _fetch_merge_stats_raw():
+    """Fetches merge_stats.json from HF repo with cache bypassing. Raises on error so failures are not cached."""
+    local_path = hf_hub_download(
+        repo_id=DATASET_REPO,
+        filename="merge_stats.json",
+        repo_type="dataset",
+        token=HUGGINGFACE_TOKEN,
+        force_download=True
+    )
+    with open(local_path, "r", encoding="utf-8") as f:
+        return json.loads(f.read().strip())
+
 def load_merge_stats():
-    """Retrieves merge metadata from merge_stats.json in the repository."""
+    """Retrieves merge metadata from merge_stats.json in the repository without caching failures."""
     try:
-        local_path = hf_hub_download(
-            repo_id=DATASET_REPO,
-            filename="merge_stats.json",
-            repo_type="dataset",
-            token=HUGGINGFACE_TOKEN
-        )
-        with open(local_path, "r", encoding="utf-8") as f:
-            return json.loads(f.read().strip())
+        return _fetch_merge_stats_raw()
     except Exception:
         return None
 
@@ -288,7 +293,8 @@ def get_main_dataset_hashes():
             repo_id=DATASET_REPO,
             filename="hashes.txt",
             repo_type="dataset",
-            token=HUGGINGFACE_TOKEN
+            token=HUGGINGFACE_TOKEN,
+            force_download=True
         )
         with open(local_path, "r", encoding="utf-8") as f:
             return set(line.strip() for line in f if line.strip())
@@ -362,6 +368,15 @@ def check_local_queue_duplicate(normalized_story: str) -> tuple[bool, str]:
                 except Exception:
                     pass
     return False, ""
+
+def get_local_queue_count() -> int:
+    """Counts files in local_queue/ directory waiting to be uploaded."""
+    if not os.path.exists(LOCAL_QUEUE_DIR):
+        return 0
+    try:
+        return len([f for f in os.listdir(LOCAL_QUEUE_DIR) if f.endswith(".jsonl")])
+    except Exception:
+        return 0
 
 # Local queue recovery
 
@@ -679,20 +694,26 @@ def upload_jsonl_to_pending(story: str, consent_given: bool, adult: bool, violen
             raise e
 
 @st.cache_data(ttl=60)
-def calculate_dataset_stats():
-    """Retrieves stats from dataset_stats.json from the repository."""
+def _fetch_dataset_stats_raw() -> dict:
+    """Retrieves stats from dataset_stats.json from the repository.
+    Raises on failure so that failed requests are never cached by Streamlit."""
+    local_path = hf_hub_download(
+        repo_id=DATASET_REPO,
+        filename="dataset_stats.json",
+        repo_type="dataset",
+        token=HUGGINGFACE_TOKEN,
+        force_download=True
+    )
+    with open(local_path, "r", encoding="utf-8") as f:
+        return json.loads(f.read().strip())
+
+def calculate_dataset_stats() -> tuple[dict | None, str | None]:
+    """Safe wrapper returning (stats_dict, error_str). Does not cache errors."""
     try:
-        local_path = hf_hub_download(
-            repo_id=DATASET_REPO,
-            filename="dataset_stats.json",
-            repo_type="dataset",
-            token=HUGGINGFACE_TOKEN
-        )
-        with open(local_path, "r", encoding="utf-8") as f:
-            return json.loads(f.read().strip())
+        return _fetch_dataset_stats_raw(), None
     except Exception as e:
         log_error(f"Failed to load dataset_stats.json (this is normal if the first merge script hasn't run yet): {str(e)}", traceback.format_exc(), 0)
-        return None
+        return None, str(e)
 
 def display_story_stats(text: str):
     """Renders character-level analytics and reading metrics for the submitted story."""
@@ -842,45 +863,61 @@ else:
     st.header("📊 Dataset Status")
     
     refresh_clicked = st.button("🔄 Refresh Status", key="refresh_status")
+    if refresh_clicked:
+        st.cache_data.clear()
+        st.toast("Dashboard cache refreshed!", icon="🔄")
     
-    if refresh_clicked or 'pending_count' not in st.session_state or 'dataset_stats' not in st.session_state:
-        with st.spinner("Fetching status information..."):
-            st.session_state.pending_count = get_pending_stories_count()
-            st.session_state.last_merge, st.session_state.last_merge_error = get_last_merge_timestamp_with_stats()
-            st.session_state.merge_status, st.session_state.merge_message = get_merge_status()
-            st.session_state.merge_stats = load_merge_stats()
-            st.session_state.dataset_stats = calculate_dataset_stats()
+    # Directly call cached functions; TTL governs freshness on reruns
+    pending_count = get_pending_stories_count() or 0
+    local_queue_count = get_local_queue_count()
+    total_unmerged = pending_count + local_queue_count
+
+    last_merge, last_merge_error = get_last_merge_timestamp_with_stats()
+    merge_status, merge_message = get_merge_status()
+    m_stats = load_merge_stats()
+    ds_stats, ds_stats_err = calculate_dataset_stats()
             
     # Metrics
     col1, col2, col3 = st.columns(3)
     
     with col1:
         st.subheader("Dataset Metrics")
-        ds_stats = st.session_state.get('dataset_stats')
         if ds_stats:
-            st.metric("Total Stories (Merged)", f"{ds_stats['total_stories']:,}")
+            st.metric(
+                "Total Stories (Merged)",
+                f"{ds_stats['total_stories']:,}",
+                delta=f"+{total_unmerged} unmerged" if total_unmerged > 0 else None,
+                delta_color="normal",
+                help="Stories submitted via the app enter the pending queue and are merged into the main dataset periodically."
+            )
             st.metric("Total Size (Characters)", f"{ds_stats['total_size_chars']:,}")
-            st.caption(f"Approximate Contributors: {ds_stats['approx_contributors']}")
+            st.caption(f"Approximate Contributors: {ds_stats.get('approx_contributors', 'N/A')}")
         else:
             st.warning("Unable to fetch dataset metrics")
-            st.caption("No data retrieved yet")
+            if ds_stats_err and ("404" in ds_stats_err or "EntryNotFound" in ds_stats_err):
+                st.caption("ℹ️ `dataset_stats.json` has not been generated yet. It will appear after the first merge.")
+            elif ds_stats_err and ("401" in ds_stats_err or "403" in ds_stats_err):
+                st.caption("⚠️ Authentication error accessing dataset repository.")
+            else:
+                st.caption("No data retrieved yet. Check logs or network connectivity.")
             
     with col2:
         st.subheader("Story Metrics")
         if ds_stats:
-            st.metric("Average Story Length", f"{int(ds_stats['avg_len']):,} chars")
-            st.metric("Median Story Length", f"{int(ds_stats['median_len']):,} chars")
-            st.caption(f"Longest Story: {ds_stats['longest_len']:,} chars")
+            st.metric("Average Story Length", f"{int(ds_stats.get('avg_len', 0)):,} chars")
+            st.metric("Median Story Length", f"{int(ds_stats.get('median_len', 0)):,} chars")
+            st.caption(f"Longest Story: {ds_stats.get('longest_len', 0):,} chars")
         else:
             st.warning("Story statistics unavailable")
             
     with col3:
         st.subheader("Submissions & Merge")
-        pending_count = st.session_state.get('pending_count', 0)
-        st.metric("Pending Stories", pending_count)
+        st.metric("Pending Stories (HF)", pending_count)
+        if local_queue_count > 0:
+            st.caption(f"⚠️ {local_queue_count} story(ies) queued locally awaiting upload.")
         
-        status = st.session_state.get('merge_status', 'Unknown')
-        message = st.session_state.get('merge_message', '')
+        status = merge_status or 'Unknown'
+        message = merge_message or ''
         if status == "Idle":
             st.success(f"✅ Status: {status}")
         elif status == "Processing":
@@ -897,16 +934,13 @@ else:
     with col_a:
         st.subheader("Submission Activity")
         if ds_stats:
-            st.write(f"📅 **Submitted Today:** {ds_stats['today_count']} stories")
-            st.write(f"📅 **Submitted This Week:** {ds_stats['week_count']} stories")
+            st.write(f"📅 **Submitted Today:** {ds_stats.get('today_count', 0)} stories")
+            st.write(f"📅 **Submitted This Week:** {ds_stats.get('week_count', 0)} stories")
         else:
             st.write("Activity data not available.")
             
     with col_b:
         st.subheader("Last Merge Activity")
-        m_stats = st.session_state.get('merge_stats')
-        last_merge = st.session_state.get('last_merge')
-        
         if last_merge:
             st.write(f"⏰ **Last Merge Time:** {last_merge.strftime('%Y-%m-%d %H:%M:%S UTC')}")
         else:
@@ -969,11 +1003,8 @@ else:
                         # Story Stats Presentation
                         display_story_stats(norm_story)
                         
-                        # Refresh dashboard statistics
+                        # Refresh dashboard statistics cache
                         st.cache_data.clear()
-                        st.session_state.pending_count = get_pending_stories_count()
-                        st.session_state.merge_status, st.session_state.merge_message = get_merge_status()
-                        st.session_state.dataset_stats = calculate_dataset_stats()
                         
                     except Exception as e:
                         st.error(f"Upload failed completely: {e}")
