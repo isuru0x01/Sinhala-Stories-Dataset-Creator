@@ -2,7 +2,7 @@
 import streamlit as st
 from huggingface_hub import HfApi, CommitOperationAdd, hf_hub_download
 from huggingface_hub.utils import HfHubHTTPError
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import io, json, re, os, time, secrets, uuid, hashlib, unicodedata
 import traceback
 import langid
@@ -933,9 +933,66 @@ else:
     col_a, col_b = st.columns(2)
     with col_a:
         st.subheader("Submission Activity")
+        now_utc = datetime.now(timezone.utc)
+        today_key = now_utc.strftime("%Y-%m-%d")
+        today_stamp = now_utc.strftime("%Y%m%d")
+        week_keys = set((now_utc - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7))
+        week_stamps = set((now_utc - timedelta(days=i)).strftime("%Y%m%d") for i in range(7))
+
+        # Merged activity from dataset_stats
+        merged_today = 0
+        merged_this_week = 0
         if ds_stats:
-            st.write(f"📅 **Submitted Today:** {ds_stats.get('today_count', 0)} stories")
-            st.write(f"📅 **Submitted This Week:** {ds_stats.get('week_count', 0)} stories")
+            daily_counts = ds_stats.get("daily_counts")
+            if isinstance(daily_counts, dict) and daily_counts:
+                merged_today = daily_counts.get(today_key, 0)
+                merged_this_week = sum(daily_counts.get(k, 0) for k in week_keys)
+            else:
+                merged_today = ds_stats.get('today_count', 0)
+                merged_this_week = ds_stats.get('week_count', 0)
+
+        # Pending activity from HF pending/ and local queue
+        pending_today = 0
+        pending_this_week = 0
+        try:
+            for pf in list_pending_filenames():
+                base = os.path.basename(pf)
+                parts = base.split("_")
+                if len(parts) >= 2 and len(parts[1]) >= 8:
+                    date_part = parts[1][:8]
+                    if date_part == today_stamp:
+                        pending_today += 1
+                    if date_part in week_stamps:
+                        pending_this_week += 1
+        except Exception:
+            pass
+
+        if os.path.exists(LOCAL_QUEUE_DIR):
+            try:
+                for lq in os.listdir(LOCAL_QUEUE_DIR):
+                    if lq.endswith(".jsonl"):
+                        for ws in week_stamps:
+                            if ws in lq:
+                                pending_this_week += 1
+                                if ws == today_stamp:
+                                    pending_today += 1
+                                break
+            except Exception:
+                pass
+
+        total_today = merged_today + pending_today
+        total_week = merged_this_week + pending_this_week
+
+        if ds_stats or total_week > 0:
+            today_label = f"{total_today} stories"
+            if pending_today > 0:
+                today_label += f" ({merged_today} merged, {pending_today} pending)"
+            st.write(f"📅 **Submitted Today:** {today_label}")
+
+            week_label = f"{total_week} stories"
+            if pending_this_week > 0:
+                week_label += f" ({merged_this_week} merged, {pending_this_week} pending)"
+            st.write(f"📅 **Submitted This Week:** {week_label}")
         else:
             st.write("Activity data not available.")
             

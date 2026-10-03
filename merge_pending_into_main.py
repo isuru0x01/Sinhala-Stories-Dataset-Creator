@@ -5,7 +5,7 @@ import time
 import json
 from huggingface_hub import HfApi, hf_hub_download, CommitOperationDelete
 from datasets import load_dataset, Dataset, concatenate_datasets, Features, Value
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 # CONFIG - set HF_TOKEN in environment or replace below (prefer env var)
 HF_TOKEN = os.environ.get("HF_TOKEN")  # or set string directly (not recommended)
@@ -176,6 +176,7 @@ def merge_and_push(pending_ds, pending_files, start_time):
             "longest_len": 24050,
             "today_count": 0,
             "week_count": 0,
+            "daily_counts": {},
             "approx_contributors": 1200
         }
 
@@ -188,13 +189,31 @@ def merge_and_push(pending_ds, pending_files, start_time):
     if dataset_stats["total_stories"] > 0:
         dataset_stats["avg_len"] = dataset_stats["total_size_chars"] / dataset_stats["total_stories"]
     if new_lengths:
-        dataset_stats["longest_len"] = max(dataset_stats["longest_len"], max(new_lengths))
+        dataset_stats["longest_len"] = max(dataset_stats.get("longest_len", 0), max(new_lengths))
     
-    # Incremental update of daily/weekly counts
-    dataset_stats["today_count"] += new_stories_count
-    dataset_stats["week_count"] += new_stories_count
+    # Compute accurate daily_counts from merged_append stories
+    now_utc = datetime.now(timezone.utc)
+    today_key = now_utc.strftime("%Y-%m-%d")
+    
+    daily_counts = {}
+    if merged_append is not None:
+        for row in merged_append:
+            ts = row.get("timestamp_utc") or ""
+            day_key = None
+            if len(ts) >= 10 and ts[4] == '-' and ts[7] == '-':
+                day_key = ts[:10]
+            elif len(ts) >= 8 and ts[:8].isdigit():
+                day_key = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
+            if day_key:
+                daily_counts[day_key] = daily_counts.get(day_key, 0) + 1
+
+    dataset_stats["daily_counts"] = daily_counts
+    rolling_7d_keys = [(now_utc - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+    dataset_stats["today_count"] = daily_counts.get(today_key, 0)
+    dataset_stats["week_count"] = sum(daily_counts.get(k, 0) for k in rolling_7d_keys)
+    
     # Incremental update of contributor count
-    dataset_stats["approx_contributors"] += 1  # approximate increment per batch
+    dataset_stats["approx_contributors"] = dataset_stats.get("approx_contributors", 1200) + 1
 
     # 5. Write merged append dataset to a local parquet file
     import json
