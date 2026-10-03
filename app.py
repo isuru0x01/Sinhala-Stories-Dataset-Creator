@@ -1013,9 +1013,31 @@ else:
     
     # Submission Form Section
     st.header("✍️ Submit Your Story")
-    
+
+    # If there was a successful submission from the previous run, display the results here
+    if "last_submission_result" in st.session_state:
+        res = st.session_state.last_submission_result
+        if res.get("is_queued"):
+            st.warning("⚠️ Hugging Face API is currently unavailable. Your story has been saved in the local queue and will be uploaded automatically once the connection is restored.")
+            st.info(f"Submission ID: `{res.get('submission_id')}`")
+        else:
+            st.success("✓ Upload completed")
+            st.success(f"✅ Submitted safely — stored in pending/ on Hugging Face. Submission ID: `{res.get('submission_id')}`")
+            st.info(f"File created: `{res.get('filename')}`")
+
+        display_story_stats(res.get("story", ""))
+        st.write("---")
+
+    if "story_form_counter" not in st.session_state:
+        st.session_state.story_form_counter = 0
+
     with st.form("story_submission_form", clear_on_submit=False):
-        story = st.text_area("Write your story (Sinhala)", height=300, placeholder="ඔබේ කතාව මෙහි ලියන්න...")
+        story = st.text_area(
+            "Write your story (Sinhala)",
+            height=300,
+            placeholder="ඔබේ කතාව මෙහි ලියන්න...",
+            key=f"story_input_{st.session_state.story_form_counter}"
+        )
         
         st.markdown("### 📄 Contributor Consent")
         consent_1 = st.checkbox("I confirm this story is my own work or I have permission to contribute it.")
@@ -1049,19 +1071,20 @@ else:
                             hate=hate
                         )
                         
-                        if is_queued:
-                            st.warning("⚠️ Hugging Face API is currently unavailable. Your story has been saved in the local queue and will be uploaded automatically once the connection is restored.")
-                            st.info(f"Submission ID: `{submission_id}`")
-                        else:
-                            st.success("✓ Upload completed")
-                            st.success(f"✅ Submitted safely — stored in pending/ on Hugging Face. Submission ID: `{submission_id}`")
-                            st.info(f"File created: `{filename}`")
-                            
-                        # Story Stats Presentation
-                        display_story_stats(norm_story)
+                        # Store result to display after form reset
+                        st.session_state.last_submission_result = {
+                            "submission_id": submission_id,
+                            "filename": filename,
+                            "is_queued": is_queued,
+                            "story": norm_story
+                        }
                         
                         # Refresh dashboard statistics cache
                         st.cache_data.clear()
+
+                        # Increment key counter so next text_area is fresh and blank
+                        st.session_state.story_form_counter += 1
+                        st.rerun()
                         
                     except Exception as e:
                         st.error(f"Upload failed completely: {e}")
