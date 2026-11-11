@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sinhala-stories-dataset-creator"
+version = "1.0.0"
+description = "A fault-tolerant, conflict-free crowdsourcing and incremental Apache Parquet ingestion framework for low-resource NLP corpora on the Hugging Face Hub."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+  { name = "Isuru Samarappulige", email = "isuru.samarappulige@bcu.ac.uk" },
+  { name = "Kaushalya Ekanayake" },
+  { name = "Hasandi Uyangoda" }
+]
+keywords = ["NLP", "low-resource-languages", "Sinhala", "crowdsourcing", "HuggingFace", "Parquet", "Streamlit"]
+dependencies = [
+  "streamlit>=1.30.0",
+  "huggingface_hub>=0.20.0",
+  "datasets>=2.14.0",
+  "langid>=1.1.6",
+  "pandas>=2.0.0",
+  "pyarrow>=14.0.0",
+  "numpy>=1.24.0",
+  "pyyaml>=6.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4.0"
+]
+
+[project.urls]
+Repository = "https://github.com/isuru0x01/Sinhala-Stories-Dataset-Creator"
+Dataset = "https://huggingface.co/datasets/Isuru0x01/sinhala_stories"
+Archive = "https://doi.org/10.5281/zenodo.21195380"

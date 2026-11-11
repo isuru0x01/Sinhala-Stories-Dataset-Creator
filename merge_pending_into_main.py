@@ -7,11 +7,21 @@ from huggingface_hub import HfApi, hf_hub_download, CommitOperationDelete
 from datasets import load_dataset, Dataset, concatenate_datasets, Features, Value
 from datetime import datetime, timezone, timedelta
 
+from validator import load_config, normalize_text, compute_sha256
+
+# Load settings from config.yaml with default fallbacks
+CONFIG = load_config()
+PROJECT_CFG = CONFIG.get("project", {})
+STORAGE_CFG = CONFIG.get("storage", {})
+
 # CONFIG - set HF_TOKEN in environment or replace below (prefer env var)
 HF_TOKEN = os.environ.get("HF_TOKEN")  # or set string directly (not recommended)
-REPO_ID = "Isuru0x01/sinhala_stories"
+REPO_ID = PROJECT_CFG.get("hf_repo_id", "Isuru0x01/sinhala_stories")
 REPO_TYPE = "dataset"
-PENDING_DIR = "pending"   # remote repo path where small jsonl files are stored
+PENDING_DIR = STORAGE_CFG.get("pending_dir", "pending")   # remote repo path where small jsonl files are stored
+APPEND_PARQUET_PATH = STORAGE_CFG.get("append_parquet_path", "data/train-append.parquet")
+HASHES_PATH = STORAGE_CFG.get("hashes_path", "hashes.txt")
+STATS_PATH = STORAGE_CFG.get("stats_path", "dataset_stats.json")
 
 # Validate and strip token
 if not HF_TOKEN:
@@ -110,7 +120,7 @@ def merge_and_push(pending_ds, pending_files, start_time):
     # 1. Load the small append dataset instead of the massive main dataset
     print("Loading incremental append dataset...")
     try:
-        append_ds = load_dataset(REPO_ID, data_files="data/train-append.parquet", split="train", token=HF_TOKEN)
+        append_ds = load_dataset(REPO_ID, data_files=APPEND_PARQUET_PATH, split="train", token=HF_TOKEN)
         print("Existing append dataset loaded. Size:", len(append_ds))
     except Exception:
         print("No existing append dataset found. Starting fresh.")
@@ -127,20 +137,8 @@ def merge_and_push(pending_ds, pending_files, start_time):
     print("Total append dataset size:", len(merged_append))
 
     # 3. Add/Update SHA-256 hashes in pending dataset
-    import hashlib
-    import unicodedata
-    import re
     from datetime import timezone
     import numpy as np
-
-    def normalize_story_local(story):
-        if not story:
-            return ""
-        normalized = unicodedata.normalize("NFC", story)
-        normalized = re.sub(r'\.{2,}', '.', normalized)
-        normalized = normalized.strip()
-        normalized = re.sub(r'\s+', ' ', normalized)
-        return normalized
 
     print("Checking and populating SHA-256 hashes for pending items...")
     new_hashes = []
@@ -149,8 +147,8 @@ def merge_and_push(pending_ds, pending_files, start_time):
         story = row.get("story", "")
         h = row.get("sha256")
         if not h and story:
-            norm_s = normalize_story_local(story)
-            h = hashlib.sha256(norm_s.encode('utf-8')).hexdigest()
+            norm_s = normalize_text(story)
+            h = compute_sha256(norm_s)
         if h:
             new_hashes.append(h)
 
@@ -159,7 +157,7 @@ def merge_and_push(pending_ds, pending_files, start_time):
     try:
         stats_path = hf_hub_download(
             repo_id=REPO_ID,
-            filename="dataset_stats.json",
+            filename=STATS_PATH,
             repo_type="dataset",
             token=HF_TOKEN,
             force_download=True
@@ -229,7 +227,7 @@ def merge_and_push(pending_ds, pending_files, start_time):
         try:
             hashes_path = hf_hub_download(
                 repo_id=REPO_ID,
-                filename="hashes.txt",
+                filename=HASHES_PATH,
                 repo_type="dataset",
                 token=HF_TOKEN,
                 force_download=True
@@ -243,7 +241,7 @@ def merge_and_push(pending_ds, pending_files, start_time):
                     f.write(h + "\n")
             hashes_upload_file = hashes_path
         else:
-            hashes_upload_file = os.path.join(tmpdir, "hashes.txt")
+            hashes_upload_file = os.path.join(tmpdir, os.path.basename(HASHES_PATH))
             with open(hashes_upload_file, "w", encoding="utf-8") as f:
                 for h in new_hashes:
                     f.write(h + "\n")
@@ -257,14 +255,14 @@ def merge_and_push(pending_ds, pending_files, start_time):
             cleanup_operations.append(CommitOperationDelete(path_in_repo=file_path))
         
         # Add parquet dataset file
-        cleanup_operations.append(CommitOperationAdd(path_in_repo="data/train-append.parquet", path_or_fileobj=parquet_path))
+        cleanup_operations.append(CommitOperationAdd(path_in_repo=APPEND_PARQUET_PATH, path_or_fileobj=parquet_path))
         
         # Add hashes.txt
-        cleanup_operations.append(CommitOperationAdd(path_in_repo="hashes.txt", path_or_fileobj=hashes_upload_file))
+        cleanup_operations.append(CommitOperationAdd(path_in_repo=HASHES_PATH, path_or_fileobj=hashes_upload_file))
 
         # Add dataset_stats.json
         buf_ds_stats = io.BytesIO(json.dumps(dataset_stats, indent=2).encode("utf-8"))
-        cleanup_operations.append(CommitOperationAdd(path_in_repo="dataset_stats.json", path_or_fileobj=buf_ds_stats))
+        cleanup_operations.append(CommitOperationAdd(path_in_repo=STATS_PATH, path_or_fileobj=buf_ds_stats))
 
         # Add merge_stats.json
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

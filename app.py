@@ -8,146 +8,57 @@ import traceback
 import langid
 import numpy as np
 
-# CONFIG
-HUGGINGFACE_TOKEN = st.secrets["HUGGINGFACE_TOKEN"]
-DATASET_REPO = "Isuru0x01/sinhala_stories"
-PENDING_DIR = "pending"              # folder in repo where we append small jsonl files
-MIN_STORY_LENGTH = 50
-MAX_STORY_LENGTH = 50000
-VALIDATION_VERSION = "1.2"
-APP_VERSION = "2.0"
-LOCAL_QUEUE_DIR = "local_queue"
+from validator import (
+    load_config,
+    normalize_text,
+    normalize_story,
+    compute_sha256,
+    calculate_script_ratio,
+    calculate_sinhala_percentage,
+    detect_language,
+    detect_sinhala_language,
+    get_words,
+    jaccard_similarity,
+    compute_jaccard_similarity,
+    compute_spam_score,
+    compute_spam_score_detailed,
+)
 
-st.set_page_config(page_title="Sinhala Story Submission (Safe Append)", layout="wide")
-st.title("📚 Sinhala Story Submission — Safe Append")
+# Load configuration from config.yaml with default fallbacks
+CONFIG = load_config()
+PROJECT_CFG = CONFIG.get("project", {})
+VALIDATION_CFG = CONFIG.get("validation", {})
+STORAGE_CFG = CONFIG.get("storage", {})
 
-# Core Utilities
+try:
+    HUGGINGFACE_TOKEN = st.secrets["HUGGINGFACE_TOKEN"]
+except Exception:
+    HUGGINGFACE_TOKEN = os.environ.get("HUGGINGFACE_TOKEN", "")
 
-def normalize_story(story: str) -> str:
-    """Performs Unicode NFC normalization, collapses multiple dots, trims whitespace, and collapses multiple spaces."""
-    normalized = unicodedata.normalize("NFC", story)
-    # Collapse multiple consecutive dots into a single dot
-    normalized = re.sub(r'\.{2,}', '.', normalized)
-    normalized = normalized.strip()
-    normalized = re.sub(r'\s+', ' ', normalized)
-    return normalized
+DATASET_REPO = PROJECT_CFG.get("hf_repo_id", "Isuru0x01/sinhala_stories")
+ID_PREFIX = PROJECT_CFG.get("id_prefix", "SLS")
+APP_VERSION = PROJECT_CFG.get("app_version", "2.0")
+VALIDATION_VERSION = PROJECT_CFG.get("validation_version", "1.2")
 
-def compute_sha256(text: str) -> str:
-    """Computes the SHA-256 hash of the text."""
-    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+PENDING_DIR = STORAGE_CFG.get("pending_dir", "pending")
+LOCAL_QUEUE_DIR = STORAGE_CFG.get("local_queue_dir", "local_queue")
+APPEND_PARQUET_PATH = STORAGE_CFG.get("append_parquet_path", "data/train-append.parquet")
+HASHES_PATH = STORAGE_CFG.get("hashes_path", "hashes.txt")
+STATS_PATH = STORAGE_CFG.get("stats_path", "dataset_stats.json")
 
-def calculate_sinhala_percentage(text: str) -> float:
-    """Calculates the percentage of Sinhala characters over all alphabetic characters."""
-    alphabetic_chars = [c for c in text if c.isalpha()]
-    if not alphabetic_chars:
-        return 0.0
-    sinhala_chars = [c for c in alphabetic_chars if 0x0D80 <= ord(c) <= 0x0DFF]
-    return len(sinhala_chars) / len(alphabetic_chars)
+MIN_STORY_LENGTH = VALIDATION_CFG.get("min_length", 50)
+MAX_STORY_LENGTH = VALIDATION_CFG.get("max_length", 50000)
+TARGET_LANG = VALIDATION_CFG.get("target_language_iso", "si")
+MIN_LANG_CONF = VALIDATION_CFG.get("min_language_confidence", 0.90)
+SCRIPT_NAME = VALIDATION_CFG.get("unicode_script_name", "Sinhala")
+SCRIPT_START = VALIDATION_CFG.get("unicode_range_start", 0x0D80)
+SCRIPT_END = VALIDATION_CFG.get("unicode_range_end", 0x0DFF)
+MIN_SCRIPT_RATIO = VALIDATION_CFG.get("min_script_ratio", 0.90)
+MIN_SPAM_SCORE = VALIDATION_CFG.get("min_spam_score", 0.20)
+JACCARD_THRESHOLD = VALIDATION_CFG.get("jaccard_similarity_threshold", 0.85)
 
-def detect_sinhala_language(text: str) -> tuple[str, float]:
-    """Identifies the language using langid. Returns (lang_code, probability)."""
-    try:
-        ranks = langid.rank(text)
-        if not ranks:
-            return 'unknown', 0.0
-        
-        # Softmax on log-likelihoods of top 5 languages to get normalized probability
-        top_ranks = ranks[:5]
-        max_score = top_ranks[0][1]
-        scores = np.array([r[1] for r in top_ranks])
-        exp_scores = np.exp(scores - max_score)
-        probs = exp_scores / np.sum(exp_scores)
-        
-        return top_ranks[0][0], float(probs[0])
-    except Exception:
-        return 'unknown', 0.0
-
-def get_words(text: str) -> set:
-    """Returns the set of words in the text (alphanumeric, lowercase)."""
-    return set(re.findall(r'\w+', text.lower()))
-
-def jaccard_similarity(set1: set, set2: set) -> float:
-    """Computes Jaccard similarity between two sets."""
-    if not set1 or not set2:
-        return 0.0
-    intersection = len(set1.intersection(set2))
-    union = len(set1.union(set2))
-    return intersection / union
-
-# Spam detection heuristics
-def compute_spam_score(text: str) -> tuple[float, list[str]]:
-    """Combines several lightweight heuristics into a spam score and returns list of reasons."""
-    reasons = []
-    score = 0.0
-    
-    # 1. Repeated characters (e.g. any character repeated 5+ times consecutively)
-    # Use finditer to score proportional to the length of the repetition
-    for match in re.finditer(r'(.)\1{4,}', text):
-        match_str = match.group(0)
-        repetitions = len(match_str)
-        score += 0.1 * repetitions
-        reasons.append(f"Character '{match.group(1)}' repeated {repetitions} times")
-        
-    # 2. Repeated words (consecutive)
-    words = text.split()
-    if words:
-        repeated_words_count = 0
-        for i in range(len(words) - 2):
-            if words[i] == words[i+1] == words[i+2]:
-                repeated_words_count += 1
-        if repeated_words_count > 0:
-            score += 0.2 * min(5, repeated_words_count)
-            reasons.append(f"Consecutive repeated words: {repeated_words_count} times")
-            
-    # 3. Repeated sentences
-    sentences = [s.strip() for s in re.split(r'[.?!\u0964]', text) if s.strip()]
-    if sentences:
-        unique_sentences = set(sentences)
-        dupes_count = len(sentences) - len(unique_sentences)
-        if dupes_count > 0:
-            ratio = dupes_count / len(sentences)
-            if ratio > 0.2:
-                score += ratio * 1.5
-                reasons.append(f"High sentence repetition: {ratio:.1%}")
-                
-    # 4. URL count
-    urls = re.findall(r'https?://[^\s]+|www\.[^\s]+', text)
-    if urls:
-        score += 0.5 * len(urls)
-        reasons.append(f"URLs found: {len(urls)}")
-        
-    # 5. Emoji ratio
-    emoji_count = len(re.findall(r'[\U00010000-\U0010ffff]', text))
-    if len(text) > 0:
-        emoji_ratio = emoji_count / len(text)
-        if emoji_ratio > 0.1:
-            score += emoji_ratio * 2.0
-            reasons.append(f"High emoji ratio: {emoji_ratio:.1%}")
-            
-    # 6. Punctuation ratio
-    punctuations = re.findall(r'[!,.:;??"\'()\-—\[\]{}「」\u0964]', text)
-    if len(text) > 0:
-        punc_ratio = len(punctuations) / len(text)
-        if punc_ratio > 0.15:
-            score += (punc_ratio - 0.15) * 3.0
-            reasons.append(f"High punctuation ratio: {punc_ratio:.1%}")
-            
-    # 7. Whitespace ratio
-    whitespaces = re.findall(r'\s', text)
-    if len(text) > 0:
-        space_ratio = len(whitespaces) / len(text)
-        if space_ratio > 0.3 or space_ratio < 0.05:
-            score += 0.3
-            reasons.append(f"Abnormal whitespace ratio: {space_ratio:.1%}")
-            
-    # 8. Vocabulary diversity (Unique words / Total words)
-    if len(words) >= 20:
-        diversity = len(set(words)) / len(words)
-        if diversity < 0.4:
-            score += (0.4 - diversity) * 2.0
-            reasons.append(f"Low vocabulary diversity: {diversity:.1%}")
-            
-    return score, reasons
+st.set_page_config(page_title=f"{PROJECT_CFG.get('name', 'Story Submission')} (Safe Append)", layout="wide")
+st.title(f"📚 {PROJECT_CFG.get('name', 'Story Submission')} — Safe Append")
 
 # AI Generation heuristics
 def check_ai_suspected(story: str) -> bool:
@@ -241,7 +152,7 @@ def compute_story_stats(text: str):
     paragraphs = [p.strip() for p in text.split('\n') if p.strip()]
     paragraph_count = len(paragraphs)
     
-    sinhala_pct = calculate_sinhala_percentage(text)
+    sinhala_pct = calculate_script_ratio(text, SCRIPT_START, SCRIPT_END)
     
     reading_time_mins = word_count / 140.0
     if reading_time_mins < 1.0:
@@ -291,7 +202,7 @@ def get_main_dataset_hashes():
     try:
         local_path = hf_hub_download(
             repo_id=DATASET_REPO,
-            filename="hashes.txt",
+            filename=HASHES_PATH,
             repo_type="dataset",
             token=HUGGINGFACE_TOKEN,
             force_download=True
@@ -340,7 +251,7 @@ def check_duplicate(normalized_story: str) -> tuple[bool, str]:
                 pending_story = data.get("story", "")
                 if pending_story:
                     sim = jaccard_similarity(new_words, get_words(pending_story))
-                    if sim > 0.85:
+                    if sim > JACCARD_THRESHOLD:
                         return True, f"❌ Story is extremely similar to a pending story awaiting merge (Near-duplicate, similarity: {sim:.1%})."
         except Exception:
             pass
@@ -470,20 +381,21 @@ def validate_story(story: str) -> list[str]:
     elif len(s) > MAX_STORY_LENGTH:
         errors.append(f"❌ Exceeds maximum {MAX_STORY_LENGTH} characters (Current: {len(s)})")
         
-    if not any(0x0D80 <= ord(c) <= 0x0DFF for c in s):
-        errors.append("⚠️ No Sinhala characters detected")
+    if not any(SCRIPT_START <= ord(c) <= SCRIPT_END for c in s):
+        errors.append(f"⚠️ No {SCRIPT_NAME} characters detected")
         
-    sinhala_pct = calculate_sinhala_percentage(s)
-    if sinhala_pct < 0.9 and any(c.isalpha() for c in s):
-        errors.append(f"⚠️ Sinhala character ratio over alphabetic characters is {sinhala_pct:.1%}, which is below the 90% threshold.")
+    script_pct = calculate_script_ratio(s, SCRIPT_START, SCRIPT_END)
+    if script_pct < MIN_SCRIPT_RATIO and any(c.isalpha() for c in s):
+        errors.append(f"⚠️ {SCRIPT_NAME} character ratio over alphabetic characters is {script_pct:.1%}, which is below the {MIN_SCRIPT_RATIO:.0%} threshold.")
         
-    lang, prob = detect_sinhala_language(s)
-    if lang != 'si' or prob < 0.9:
-        errors.append(f"❌ Language identification failed. Top guess: {lang} with {prob:.1%} probability. Must be Sinhala ('si') with at least 90% confidence.")
+    lang, prob = detect_language(s, TARGET_LANG)
+    if lang != TARGET_LANG or prob < MIN_LANG_CONF:
+        errors.append(f"❌ Language identification failed. Top guess: '{lang}' with {prob:.1%} probability. Must be {SCRIPT_NAME} ('{TARGET_LANG}') with at least {MIN_LANG_CONF:.0%} confidence.")
         
-    spam_score, spam_reasons = compute_spam_score(s)
-    if spam_score > 1.0:
-        errors.append(f"❌ Story rejected as potential spam (Spam Score: {spam_score:.2f}). Reasons: {', '.join(spam_reasons)}")
+    spam_score, spam_reasons = compute_spam_score_detailed(s)
+    if spam_score < MIN_SPAM_SCORE:
+        reasons_msg = f" Reasons: {', '.join(spam_reasons)}" if spam_reasons else ""
+        errors.append(f"❌ Story rejected as potential spam (Quality Score: {spam_score:.2f} < {MIN_SPAM_SCORE}).{reasons_msg}")
         
     is_local_dup, local_msg = check_local_queue_duplicate(s)
     if is_local_dup:
@@ -626,7 +538,7 @@ def upload_jsonl_to_pending(story: str, consent_given: bool, adult: bool, violen
     contributor_session_hash = hashlib.sha256(st.session_state.session_id.encode('utf-8')).hexdigest()[:8]
     
     suffix = secrets.token_hex(3).upper() # 6 hex characters
-    submission_id = f"SLS-{date_str}-{suffix}"
+    submission_id = f"{ID_PREFIX}-{date_str}-{suffix}"
     
     # Calculate stats
     stats = compute_story_stats(normalized)
@@ -699,7 +611,7 @@ def _fetch_dataset_stats_raw() -> dict:
     Raises on failure so that failed requests are never cached by Streamlit."""
     local_path = hf_hub_download(
         repo_id=DATASET_REPO,
-        filename="dataset_stats.json",
+        filename=STATS_PATH,
         repo_type="dataset",
         token=HUGGINGFACE_TOKEN,
         force_download=True
@@ -726,7 +638,7 @@ def display_story_stats(text: str):
     with col2:
         st.metric("Words", f"{stats['word_count']:,}")
     with col3:
-        st.metric("Sinhala Ratio", f"{stats['sinhala_pct']:.1%}")
+        st.metric(f"{SCRIPT_NAME} Ratio", f"{stats['sinhala_pct']:.1%}")
     with col4:
         st.metric("Est. Reading Time", stats["reading_time_str"])
         

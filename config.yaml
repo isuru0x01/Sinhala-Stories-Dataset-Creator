@@ -1,0 +1,26 @@
+# Default Configuration for Low-Resource NLP Crowdsourced Corpus Ingestion
+project:
+  name: "Sinhala Stories Dataset Creator"
+  app_version: "2.0"
+  validation_version: "1.2"
+  hf_repo_id: "Isuru0x01/sinhala_stories"
+  id_prefix: "SLS"
+
+validation:
+  min_length: 50
+  max_length: 50000
+  target_language_iso: "si"
+  min_language_confidence: 0.90
+  unicode_script_name: "Sinhala"
+  unicode_range_start: 0x0D80  # U+0D80
+  unicode_range_end: 0x0DFF    # U+0DFF
+  min_script_ratio: 0.90
+  min_spam_score: 0.20
+  jaccard_similarity_threshold: 0.85
+
+storage:
+  pending_dir: "pending"
+  local_queue_dir: "local_queue"
+  append_parquet_path: "data/train-append.parquet"
+  hashes_path: "hashes.txt"
+  stats_path: "dataset_stats.json"
