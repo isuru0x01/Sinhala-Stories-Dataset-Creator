@@ -16,9 +16,9 @@ STORAGE_CFG = CONFIG.get("storage", {})
 
 # Exact baseline counts from original 10 shards (train-00000 to train-00009)
 BASE_STORIES = 10949004
-BASE_SIZE_CHARS = 4515320120
-BASE_LONGEST_LEN = 24050
-BASE_MEDIAN_LEN = 320.0
+BASE_SIZE_CHARS = 1231746068
+BASE_LONGEST_LEN = 49974
+BASE_MEDIAN_LEN = 94.0
 BASE_CONTRIBUTORS = 1200
 
 # CONFIG - set HF_TOKEN in environment or replace below (prefer env var)
@@ -180,7 +180,11 @@ def sync_stats_if_needed():
         append_ds = None
 
     fresh_stats = compute_dataset_stats(append_ds)
-    if current_stats.get("total_stories") == fresh_stats["total_stories"]:
+    if (
+        current_stats.get("total_stories") == fresh_stats["total_stories"]
+        and current_stats.get("total_size_chars") == fresh_stats["total_size_chars"]
+        and current_stats.get("longest_len") == fresh_stats["longest_len"]
+    ):
         print(f"Dataset stats are already synchronized ({fresh_stats['total_stories']} stories).")
         return
 
