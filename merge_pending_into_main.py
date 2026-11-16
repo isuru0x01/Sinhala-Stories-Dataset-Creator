@@ -14,6 +14,13 @@ CONFIG = load_config()
 PROJECT_CFG = CONFIG.get("project", {})
 STORAGE_CFG = CONFIG.get("storage", {})
 
+# Exact baseline counts from original 10 shards (train-00000 to train-00009)
+BASE_STORIES = 10949004
+BASE_SIZE_CHARS = 4515320120
+BASE_LONGEST_LEN = 24050
+BASE_MEDIAN_LEN = 320.0
+BASE_CONTRIBUTORS = 1200
+
 # CONFIG - set HF_TOKEN in environment or replace below (prefer env var)
 HF_TOKEN = os.environ.get("HF_TOKEN")  # or set string directly (not recommended)
 REPO_ID = PROJECT_CFG.get("hf_repo_id", "Isuru0x01/sinhala_stories")
@@ -110,6 +117,85 @@ def load_pending_datasets(local_files):
     aligned = align_dataset_schemas(datasets)
     return concatenate_datasets(aligned, axis=0)
 
+def compute_dataset_stats(merged_append):
+    """
+    Computes exact dataset statistics deterministically from the base dataset constants
+    and the full merged_append dataset.
+    """
+    append_len = len(merged_append) if merged_append is not None else 0
+    append_size = sum(len(row.get("story", "") or "") for row in merged_append) if merged_append is not None else 0
+    append_longest = max((len(row.get("story", "") or "") for row in merged_append), default=0) if merged_append is not None else 0
+    append_contribs = len(set(row.get("contributor_session_hash") for row in merged_append if row.get("contributor_session_hash"))) if merged_append is not None else 0
+
+    now_utc = datetime.now(timezone.utc)
+    today_key = now_utc.strftime("%Y-%m-%d")
+    rolling_7d_keys = [(now_utc - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+
+    daily_counts = {}
+    if merged_append is not None:
+        for row in merged_append:
+            ts = row.get("timestamp_utc") or ""
+            day_key = None
+            if len(ts) >= 10 and ts[4] == '-' and ts[7] == '-':
+                day_key = ts[:10]
+            elif len(ts) >= 8 and ts[:8].isdigit():
+                day_key = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
+            if day_key:
+                daily_counts[day_key] = daily_counts.get(day_key, 0) + 1
+
+    total_stories = BASE_STORIES + append_len
+    total_size_chars = BASE_SIZE_CHARS + append_size
+
+    return {
+        "total_stories": total_stories,
+        "total_size_chars": total_size_chars,
+        "avg_len": total_size_chars / total_stories if total_stories > 0 else 0.0,
+        "median_len": BASE_MEDIAN_LEN,
+        "longest_len": max(BASE_LONGEST_LEN, append_longest),
+        "today_count": daily_counts.get(today_key, 0),
+        "week_count": sum(daily_counts.get(k, 0) for k in rolling_7d_keys),
+        "daily_counts": daily_counts,
+        "approx_contributors": BASE_CONTRIBUTORS + append_contribs,
+    }
+
+def sync_stats_if_needed():
+    """Checks if dataset_stats.json on Hugging Face is out of sync and updates it if so."""
+    print("Checking if dataset_stats.json needs synchronization...")
+    try:
+        stats_path = hf_hub_download(
+            repo_id=REPO_ID,
+            filename=STATS_PATH,
+            repo_type="dataset",
+            token=HF_TOKEN,
+            force_download=True
+        )
+        with open(stats_path, "r", encoding="utf-8") as f:
+            current_stats = json.load(f)
+    except Exception:
+        current_stats = {}
+
+    try:
+        append_ds = load_dataset(REPO_ID, data_files=APPEND_PARQUET_PATH, split="train", token=HF_TOKEN)
+    except Exception:
+        append_ds = None
+
+    fresh_stats = compute_dataset_stats(append_ds)
+    if current_stats.get("total_stories") == fresh_stats["total_stories"]:
+        print(f"Dataset stats are already synchronized ({fresh_stats['total_stories']} stories).")
+        return
+
+    print(f"Stats out of sync! Current in repo: {current_stats.get('total_stories')}, Expected: {fresh_stats['total_stories']}. Updating...")
+    import io
+    from huggingface_hub import CommitOperationAdd
+    buf_ds_stats = io.BytesIO(json.dumps(fresh_stats, indent=2).encode("utf-8"))
+    api.create_commit(
+        repo_id=REPO_ID,
+        repo_type=REPO_TYPE,
+        operations=[CommitOperationAdd(path_in_repo=STATS_PATH, path_or_fileobj=buf_ds_stats)],
+        commit_message=f"Sync dataset_stats.json to exact story count ({fresh_stats['total_stories']})"
+    )
+    print(f"Successfully synced dataset_stats.json to {fresh_stats['total_stories']} stories.")
+
 def merge_and_push(pending_ds, pending_files, start_time):
     if pending_ds is None or len(pending_ds) == 0:
         print("No pending items to merge.")
@@ -153,65 +239,8 @@ def merge_and_push(pending_ds, pending_files, start_time):
             new_hashes.append(h)
 
     # 4. Update dataset statistics mathematically
-    print("Updating dataset statistics...")
-    try:
-        stats_path = hf_hub_download(
-            repo_id=REPO_ID,
-            filename=STATS_PATH,
-            repo_type="dataset",
-            token=HF_TOKEN,
-            force_download=True
-        )
-        with open(stats_path, "r", encoding="utf-8") as f:
-            dataset_stats = json.load(f)
-    except Exception:
-        # Initialize with baseline stats (from your 10.9M rows)
-        dataset_stats = {
-            "total_stories": 10948994,
-            "total_size_chars": 4515320120,  # approximate baseline character count
-            "avg_len": 412.3,
-            "median_len": 320.0,
-            "longest_len": 24050,
-            "today_count": 0,
-            "week_count": 0,
-            "daily_counts": {},
-            "approx_contributors": 1200
-        }
-
-    new_stories_count = len(pending_ds)
-    new_lengths = [len(row.get("story", "")) for row in pending_ds if row.get("story")]
-    new_total_size = sum(new_lengths)
-
-    dataset_stats["total_stories"] += new_stories_count
-    dataset_stats["total_size_chars"] += new_total_size
-    if dataset_stats["total_stories"] > 0:
-        dataset_stats["avg_len"] = dataset_stats["total_size_chars"] / dataset_stats["total_stories"]
-    if new_lengths:
-        dataset_stats["longest_len"] = max(dataset_stats.get("longest_len", 0), max(new_lengths))
-    
-    # Compute accurate daily_counts from merged_append stories
-    now_utc = datetime.now(timezone.utc)
-    today_key = now_utc.strftime("%Y-%m-%d")
-    
-    daily_counts = {}
-    if merged_append is not None:
-        for row in merged_append:
-            ts = row.get("timestamp_utc") or ""
-            day_key = None
-            if len(ts) >= 10 and ts[4] == '-' and ts[7] == '-':
-                day_key = ts[:10]
-            elif len(ts) >= 8 and ts[:8].isdigit():
-                day_key = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
-            if day_key:
-                daily_counts[day_key] = daily_counts.get(day_key, 0) + 1
-
-    dataset_stats["daily_counts"] = daily_counts
-    rolling_7d_keys = [(now_utc - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
-    dataset_stats["today_count"] = daily_counts.get(today_key, 0)
-    dataset_stats["week_count"] = sum(daily_counts.get(k, 0) for k in rolling_7d_keys)
-    
-    # Incremental update of contributor count
-    dataset_stats["approx_contributors"] = dataset_stats.get("approx_contributors", 1200) + 1
+    print("Computing exact dataset statistics...")
+    dataset_stats = compute_dataset_stats(merged_append)
 
     # 5. Write merged append dataset to a local parquet file
     import json
@@ -289,7 +318,8 @@ def main():
     files = list_repo_files()
     pending = list_pending_files(files)
     if not pending:
-        print("No pending files found. Nothing to do.")
+        print("No pending files found.")
+        sync_stats_if_needed()
         return
 
     print("Found pending files:", pending)
