@@ -19,7 +19,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install huggingface_hub datasets
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Run merge script
         env:

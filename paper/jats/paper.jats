@@ -1,0 +1,610 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE article PUBLIC "-//NLM//DTD JATS (Z39.96) Journal Publishing DTD v1.2 20190208//EN"
+                  "JATS-publishing1.dtd">
+<article xmlns:mml="http://www.w3.org/1998/Math/MathML" xmlns:xlink="http://www.w3.org/1999/xlink" dtd-version="1.2" article-type="other">
+<front>
+<journal-meta>
+<journal-id></journal-id>
+<journal-title-group>
+<journal-title>Journal of Open Source Software</journal-title>
+<abbrev-journal-title>JOSS</abbrev-journal-title>
+</journal-title-group>
+<issn publication-format="electronic">2475-9066</issn>
+<publisher>
+<publisher-name>Open Journals</publisher-name>
+</publisher>
+</journal-meta>
+<article-meta>
+<article-id pub-id-type="publisher-id">0</article-id>
+<article-id pub-id-type="doi">N/A</article-id>
+<title-group>
+<article-title>Sinhala-Stories-Dataset-Creator: A Fault-Tolerant
+Crowdsourcing and Incremental Parquet Ingestion Framework for
+Low-Resource NLP</article-title>
+</title-group>
+<contrib-group>
+<contrib contrib-type="author">
+<name>
+<surname>Samarappulige</surname>
+<given-names>Isuru</given-names>
+</name>
+<email>isuru.samarappulige@bcu.ac.uk</email>
+<xref ref-type="aff" rid="aff-1"/>
+</contrib>
+<contrib contrib-type="author">
+<name>
+<surname>Ekanayake</surname>
+<given-names>Kaushalya</given-names>
+</name>
+<xref ref-type="aff" rid="aff-2"/>
+</contrib>
+<contrib contrib-type="author">
+<name>
+<surname>Uyangoda</surname>
+<given-names>Hasandi</given-names>
+</name>
+<xref ref-type="aff" rid="aff-3"/>
+</contrib>
+<aff id="aff-1">
+<institution-wrap>
+<institution>School of Computing and Digital Technology, Birmingham City
+University, United Kingdom</institution>
+</institution-wrap>
+</aff>
+<aff id="aff-2">
+<institution-wrap>
+<institution>Independent Researcher, Colombo, Sri Lanka</institution>
+</institution-wrap>
+</aff>
+<aff id="aff-3">
+<institution-wrap>
+<institution>Independent Researcher, Kandy, Sri Lanka</institution>
+</institution-wrap>
+</aff>
+</contrib-group>
+<pub-date date-type="pub" publication-format="electronic" iso-8601-date="2026-11-11">
+<day>11</day>
+<month>11</month>
+<year>2026</year>
+</pub-date>
+<volume>¿VOL?</volume>
+<issue>¿ISSUE?</issue>
+<fpage>¿PAGE?</fpage>
+<permissions>
+<copyright-statement>Authors of papers retain copyright and release the
+work under a Creative Commons Attribution 4.0 International License (CC
+BY 4.0)</copyright-statement>
+<copyright-year>1970</copyright-year>
+<copyright-holder>The article authors</copyright-holder>
+<license license-type="open-access" xlink:href="https://creativecommons.org/licenses/by/4.0/">
+<license-p>Authors of papers retain copyright and release the work under
+a Creative Commons Attribution 4.0 International License (CC BY
+4.0)</license-p>
+</license>
+</permissions>
+<kwd-group kwd-group-type="author">
+<kwd>Python</kwd>
+<kwd>Natural Language Processing</kwd>
+<kwd>Low-Resource Languages</kwd>
+<kwd>Sinhala</kwd>
+<kwd>Crowdsourcing</kwd>
+<kwd>Apache Parquet</kwd>
+<kwd>Hugging Face Hub</kwd>
+<kwd>Streamlit</kwd>
+</kwd-group>
+</article-meta>
+</front>
+<body>
+<sec id="summary">
+  <title>Summary</title>
+  <p>Progress in modern natural language processing (NLP) is
+  disproportionately concentrated in high-resource languages due to the
+  abundance of digitized web-scale text. Low-resource languages, such as
+  Sinhala (an Indo-Aryan language spoken by over 17 million people),
+  suffer from severe data sparsity, fragmented digital corpora, and lack
+  of standardized crowdsourcing infrastructure
+  (<xref alt="Joshi et al., 2020" rid="ref-joshi2020state" ref-type="bibr">Joshi
+  et al., 2020</xref>;
+  <xref alt="Ranathunga et al., 2023" rid="ref-ranathunga2023sinhala" ref-type="bibr">Ranathunga
+  et al., 2023</xref>).</p>
+  <p><monospace>Sinhala-Stories-Dataset-Creator</monospace> is an
+  open-source, fault-tolerant crowdsourcing and incremental dataset
+  ingestion framework engineered for low-resource NLP. The framework
+  decouples high-concurrency contributor submissions from large-scale
+  corpus storage on the Hugging Face Hub, bypassing Git tree write
+  contention and eliminating out-of-memory overhead during data
+  ingestion. Although its flagship deployment curates the
+  10.9-million-row <monospace>Isuru0x01/sinhala_stories</monospace>
+  corpus, the framework is architecturally generalized: by modifying a
+  single declarative configuration file
+  (<monospace>config.yaml</monospace>), researchers and language
+  communities can immediately deploy identical fault-tolerant ingestion
+  pipelines for other low-resource scripts (e.g., Tamil, Dhivehi, Khmer,
+  or Swahili).</p>
+</sec>
+<sec id="statement-of-need">
+  <title>Statement of Need</title>
+  <p>Collecting web-scale or domain-specific text for low-resource
+  languages typically relies on participatory crowdsourcing
+  (<xref alt="Nekoto et al., 2020" rid="ref-nekoto2020participatory" ref-type="bibr">Nekoto
+  et al., 2020</xref>). However, deploying real-time crowdsourcing
+  applications directly against version-controlled cloud repositories
+  like the Hugging Face Hub
+  (<xref alt="Lhoest et al., 2021" rid="ref-lhoest2021datasets" ref-type="bibr">Lhoest
+  et al., 2021</xref>;
+  <xref alt="Wolf et al., 2020" rid="ref-wolf2020transformers" ref-type="bibr">Wolf
+  et al., 2020</xref>) presents severe engineering bottlenecks:</p>
+  <list list-type="order">
+    <list-item>
+      <p><bold>Concurrent Write Collisions:</bold> Traditional
+      Git-backed storage repositories fail when multiple distributed
+      contributors attempt to commit records simultaneously, resulting
+      in merge conflicts and dropped submissions.</p>
+    </list-item>
+    <list-item>
+      <p><bold>Memory and Bandwidth Scalability:</bold> Directly
+      appending records to massive multi-gigabyte monolithic Apache
+      Parquet
+      (<xref alt="Apache Arrow Developers, 2024" rid="ref-pyarrow2024" ref-type="bibr">Apache
+      Arrow Developers, 2024</xref>) files in an active web app exhausts
+      server memory and introduces unacceptable latency for end
+      users.</p>
+    </list-item>
+    <list-item>
+      <p><bold>Quality and Noise Gating:</bold> Low-resource web
+      submissions often suffer from mixed-script contamination,
+      synthetic text spam, and near-duplicate submissions. Running
+      exhaustive pairwise duplicate comparisons across millions of
+      records during web ingestion is computationally prohibitive
+      (<inline-formula><alternatives>
+      <tex-math><![CDATA[O(N)]]></tex-math>
+      <mml:math display="inline" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:mrow><mml:mi>O</mml:mi><mml:mo stretchy="false" form="prefix">(</mml:mo><mml:mi>N</mml:mi><mml:mo stretchy="false" form="postfix">)</mml:mo></mml:mrow></mml:math></alternatives></inline-formula>
+      or <inline-formula><alternatives>
+      <tex-math><![CDATA[O(N^2)]]></tex-math>
+      <mml:math display="inline" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:mrow><mml:mi>O</mml:mi><mml:mo stretchy="false" form="prefix">(</mml:mo><mml:msup><mml:mi>N</mml:mi><mml:mn>2</mml:mn></mml:msup><mml:mo stretchy="false" form="postfix">)</mml:mo></mml:mrow></mml:math></alternatives></inline-formula>).</p>
+    </list-item>
+    <list-item>
+      <p><bold>Offline and Network Volatility:</bold> In regions with
+      intermittent internet connectivity, contributors frequently lose
+      long-form submissions due to transient connection drops.</p>
+    </list-item>
+  </list>
+  <p><monospace>Sinhala-Stories-Dataset-Creator</monospace> resolves
+  these challenges through a three-stage decoupled architecture
+  featuring asynchronous staged micro-queues, automated two-tier
+  deduplication, offline browser-side queueing, and scheduled
+  incremental Parquet ingestion.</p>
+</sec>
+<sec id="state-of-the-field">
+  <title>State of the Field</title>
+  <p>Existing pipelines for low-resource language dataset acquisition
+  generally fall into three categories, none of which address concurrent
+  community crowdsourcing with automated cloud repository
+  synchronization:</p>
+  <list list-type="order">
+    <list-item>
+      <p><bold>Web-Scraped Corpus Extractors:</bold> Pipelines scraping
+      Common Crawl or multilingual web dumps (e.g., CC100, OSCAR,
+      MADLAD-400) suffer from catastrophic quality degradation in
+      low-resource scripts, including machine-translated gibberish,
+      heavy boilerplate contamination, and encoding corruption
+      (<xref alt="Joshi et al., 2020" rid="ref-joshi2020state" ref-type="bibr">Joshi
+      et al., 2020</xref>;
+      <xref alt="Kreutzer et al., 2022" rid="ref-kreutzer2022quality" ref-type="bibr">Kreutzer
+      et al., 2022</xref>).</p>
+    </list-item>
+    <list-item>
+      <p><bold>Generic Survey and Form Tools:</bold> Form builders
+      (e.g., Google Forms, Qualtrics, KoboToolbox) lack domain-specific
+      validation, script ratio verification, cryptographic
+      deduplication, and automated formatting into
+      machine-learning-ready schemas.</p>
+    </list-item>
+    <list-item>
+      <p><bold>Annotation Platforms:</bold> Tools such as Label Studio,
+      Prodigy, or doccano focus primarily on human-in-the-loop
+      classification and entity tagging for pre-existing texts, rather
+      than large-scale, participatory raw text authoring and
+      ingestion.</p>
+    </list-item>
+  </list>
+  <sec id="build-vs.-contribute-justification">
+    <title>Build vs. Contribute Justification</title>
+    <p>Direct crowdsourcing interfaces hosted on Hugging Face Spaces
+    typically attempt synchronous commits directly into the target
+    dataset repository. Under active contributor traffic, this design
+    suffers immediate Git lock contention, commit rejection, and severe
+    memory exhaustion when re-serializing monolithic Parquet files.
+    Rather than deploying and maintaining cost-prohibitive relational
+    databases or distributed message queues (e.g., Kafka or RabbitMQ)
+    that impose severe infrastructure costs on academic researchers,
+    <monospace>Sinhala-Stories-Dataset-Creator</monospace> establishes a
+    zero-cost serverless pattern. By combining Hugging Face Hub API
+    primitives with GitHub Actions automation, it delivers
+    conflict-free, cost-effective crowdsourcing accessible to
+    under-resourced research groups.</p>
+  </sec>
+</sec>
+<sec id="software-design">
+  <title>Software Design</title>
+  <p>The framework operates as a decoupled, three-tier ingestion and
+  synchronization pipeline, illustrated in
+  <xref alt="[fig:architecture]" rid="figU003Aarchitecture">[fig:architecture]</xref>.</p>
+  <fig>
+    <caption><p>Software Architecture: Three-tier decoupled
+    crowdsourcing, staged micro-queues, and incremental Parquet
+    ingestion
+    pipeline.<styled-content id="figU003Aarchitecture"></styled-content></p></caption>
+    <graphic mimetype="image" mime-subtype="png" xlink:href="figure1_architecture.png" />
+  </fig>
+  <sec id="key-architectural-components">
+    <title>Key Architectural Components</title>
+    <list list-type="order">
+      <list-item>
+        <p><bold>Client Submission Interface
+        (<monospace>app.py</monospace>):</bold> Built on Streamlit, the
+        contributor interface provides a responsive, low-latency
+        environment for text input. The client executes real-time
+        telemetry analytics (character counts, word counts, unique
+        character counts, average word length, sentence/paragraph
+        segmentation, and estimated reading time) and enforces
+        contributor consent for open research release. If the remote
+        Hugging Face API is unreachable due to network volatility, the
+        client automatically diverts submissions to an encrypted local
+        disk queue (<monospace>local_queue/</monospace>) and replays
+        them upon connection restoration.</p>
+      </list-item>
+      <list-item>
+        <p><bold>Conflict-Free Staging Micro-Queue:</bold> Rather than
+        writing directly to the primary dataset file, each valid
+        submission is serialized into an isolated micro-file
+        (<monospace>pending/story_&lt;timestamp&gt;_&lt;hash_prefix&gt;.jsonl</monospace>)
+        and committed via the Hugging Face Hub API. Because each
+        submission targets a unique filename, hundreds of concurrent
+        contributors can submit stories simultaneously without
+        experiencing Git lock contention or merge collisions.</p>
+      </list-item>
+      <list-item>
+        <p><bold>Automated Incremental Merge Engine
+        (<monospace>merge_pending_into_main.py</monospace>):</bold> A
+        scheduled GitHub Actions workflow (or daemon runner) executes
+        periodically (e.g., every 5 minutes). The engine scans and
+        downloads pending micro-files, harmonizes schema features,
+        appends records directly to an auxiliary delta partition
+        (<monospace>data/train-append.parquet</monospace>), updates
+        SHA-256 fingerprints in <monospace>hashes.txt</monospace>,
+        recalculates corpus statistics in
+        <monospace>dataset_stats.json</monospace>, and deletes processed
+        micro-files within a single atomic commit.</p>
+      </list-item>
+    </list>
+  </sec>
+  <sec id="engineering-design-trade-offs">
+    <title>Engineering Design Trade-offs</title>
+    <list list-type="bullet">
+      <list-item>
+        <p><bold>Staged Micro-Queuing vs. Centralized Relational
+        Database:</bold> Choosing remote micro-file staging over an
+        external database (e.g., PostgreSQL) eliminates hosting expenses
+        and authentication overhead. The minor trade-off is eventual
+        consistency, as submissions reside in
+        <monospace>pending/</monospace> until the next scheduled batch
+        merge.</p>
+      </list-item>
+      <list-item>
+        <p><bold>Delta Parquet Partitioning vs. Monolithic File
+        Appending:</bold> Appending records to an auxiliary delta
+        partition (<monospace>train-append.parquet</monospace>) allows
+        the merge engine to run within standard memory constraints
+        (sub-500 MB RAM), completely bypassing the prohibitive network
+        transfer and memory overhead of rewriting the 10.9M-row base
+        corpus.</p>
+      </list-item>
+      <list-item>
+        <p><bold>Two-Tier Deduplication vs. Exhaustive Pairwise
+        Comparisons:</bold> Running pairwise n-gram or string distance
+        comparisons against millions of records is computationally
+        intractable (<inline-formula><alternatives>
+        <tex-math><![CDATA[O(N)]]></tex-math>
+        <mml:math display="inline" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:mrow><mml:mi>O</mml:mi><mml:mo stretchy="false" form="prefix">(</mml:mo><mml:mi>N</mml:mi><mml:mo stretchy="false" form="postfix">)</mml:mo></mml:mrow></mml:math></alternatives></inline-formula>)
+        during real-time web requests. The framework trades full
+        pairwise fuzzy matching across the historical archive for
+        instant <inline-formula><alternatives>
+        <tex-math><![CDATA[O(1)]]></tex-math>
+        <mml:math display="inline" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:mrow><mml:mi>O</mml:mi><mml:mo stretchy="false" form="prefix">(</mml:mo><mml:mn>1</mml:mn><mml:mo stretchy="false" form="postfix">)</mml:mo></mml:mrow></mml:math></alternatives></inline-formula>
+        SHA-256 cryptographic hash lookup across the full corpus,
+        reserving fuzzy lexical Jaccard matching
+        (<inline-formula><alternatives>
+        <tex-math><![CDATA[J(A, B) \ge 0.85]]></tex-math>
+        <mml:math display="inline" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:mrow><mml:mi>J</mml:mi><mml:mo stretchy="false" form="prefix">(</mml:mo><mml:mi>A</mml:mi><mml:mo>,</mml:mo><mml:mi>B</mml:mi><mml:mo stretchy="false" form="postfix">)</mml:mo><mml:mo>≥</mml:mo><mml:mn>0.85</mml:mn></mml:mrow></mml:math></alternatives></inline-formula>)
+        strictly for the transient pending staging queue.</p>
+      </list-item>
+    </list>
+  </sec>
+</sec>
+<sec id="quality-control-and-validation-pipeline">
+  <title>Quality Control and Validation Pipeline</title>
+  <p>The pure Python module <monospace>validator.py</monospace>
+  decouples validation logic from the presentation layer to ensure
+  modularity, high performance, and unit-testability.</p>
+  <sec id="unicode-normalization-and-cleaning">
+    <title>Unicode Normalization and Cleaning</title>
+    <p>All input text is normalized to Unicode Normalization Form C
+    (NFC) via <monospace>unicodedata.normalize()</monospace>,
+    eliminating non-standard composable diacritic inconsistencies common
+    in Indic and Brahmic scripts. Redundant punctuation (e.g., repeated
+    dots <monospace>...</monospace>) is collapsed to single stops, and
+    whitespace sequences are standardized.</p>
+  </sec>
+  <sec id="script-ratio-and-language-verification">
+    <title>Script Ratio and Language Verification</title>
+    <p>To prevent cross-language script contamination, the module
+    calculates the ratio of alphabetic characters within the target
+    Unicode block: <disp-formula><alternatives>
+    <tex-math><![CDATA[\text{Ratio}_{\text{script}} = \frac{\sum_{c \in S_{\text{alpha}}} \mathbb{I}(U_{\text{start}} \le \text{ord}(c) \le U_{\text{end}})}{|S_{\text{alpha}}|}]]></tex-math>
+    <mml:math display="block" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:mrow><mml:msub><mml:mtext mathvariant="normal">Ratio</mml:mtext><mml:mtext mathvariant="normal">script</mml:mtext></mml:msub><mml:mo>=</mml:mo><mml:mfrac><mml:mrow><mml:munder><mml:mo>∑</mml:mo><mml:mrow><mml:mi>c</mml:mi><mml:mo>∈</mml:mo><mml:msub><mml:mi>S</mml:mi><mml:mtext mathvariant="normal">alpha</mml:mtext></mml:msub></mml:mrow></mml:munder><mml:mi>𝕀</mml:mi><mml:mo stretchy="false" form="prefix">(</mml:mo><mml:msub><mml:mi>U</mml:mi><mml:mtext mathvariant="normal">start</mml:mtext></mml:msub><mml:mo>≤</mml:mo><mml:mtext mathvariant="normal">ord</mml:mtext><mml:mo stretchy="false" form="prefix">(</mml:mo><mml:mi>c</mml:mi><mml:mo stretchy="false" form="postfix">)</mml:mo><mml:mo>≤</mml:mo><mml:msub><mml:mi>U</mml:mi><mml:mtext mathvariant="normal">end</mml:mtext></mml:msub><mml:mo stretchy="false" form="postfix">)</mml:mo></mml:mrow><mml:mrow><mml:mo stretchy="false" form="prefix">|</mml:mo><mml:msub><mml:mi>S</mml:mi><mml:mtext mathvariant="normal">alpha</mml:mtext></mml:msub><mml:mo stretchy="false" form="prefix">|</mml:mo></mml:mrow></mml:mfrac></mml:mrow></mml:math></alternatives></disp-formula>
+    Submissions falling below the configured threshold
+    (<inline-formula><alternatives>
+    <tex-math><![CDATA[\text{Ratio}_{\text{script}} < 0.90]]></tex-math>
+    <mml:math display="inline" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:mrow><mml:msub><mml:mtext mathvariant="normal">Ratio</mml:mtext><mml:mtext mathvariant="normal">script</mml:mtext></mml:msub><mml:mo>&lt;</mml:mo><mml:mn>0.90</mml:mn></mml:mrow></mml:math></alternatives></inline-formula>)
+    are rejected. Subsequently, <monospace>langid</monospace>
+    (<xref alt="Lui &amp; Baldwin, 2012" rid="ref-lui2012langid" ref-type="bibr">Lui
+    &amp; Baldwin, 2012</xref>) computes language identification
+    probabilities using a normalized softmax over candidate
+    log-likelihoods, ensuring high-confidence classification
+    (<inline-formula><alternatives>
+    <tex-math><![CDATA[P(\text{target}) \ge 0.90]]></tex-math>
+    <mml:math display="inline" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:mrow><mml:mi>P</mml:mi><mml:mo stretchy="false" form="prefix">(</mml:mo><mml:mtext mathvariant="normal">target</mml:mtext><mml:mo stretchy="false" form="postfix">)</mml:mo><mml:mo>≥</mml:mo><mml:mn>0.90</mml:mn></mml:mrow></mml:math></alternatives></inline-formula>).</p>
+  </sec>
+  <sec id="heuristic-spam-and-synthetic-text-gating">
+    <title>Heuristic Spam and Synthetic Text Gating</title>
+    <p>A composite heuristic quality score penalizes abnormal repetition
+    patterns: * Consecutive character repetitions of length
+    <inline-formula><alternatives>
+    <tex-math><![CDATA[\ge 5]]></tex-math>
+    <mml:math display="inline" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:mrow><mml:mo>≥</mml:mo><mml:mn>5</mml:mn></mml:mrow></mml:math></alternatives></inline-formula>;
+    * Repetitive consecutive n-grams; * High sentence-level duplication
+    ratios; * Abnormal vocabulary diversity
+    (<inline-formula><alternatives>
+    <tex-math><![CDATA[\frac{|V_{\text{unique}}|}{|V_{\text{total}}|} < 0.40]]></tex-math>
+    <mml:math display="inline" xmlns:mml="http://www.w3.org/1998/Math/MathML"><mml:mrow><mml:mfrac><mml:mrow><mml:mo stretchy="false" form="prefix">|</mml:mo><mml:msub><mml:mi>V</mml:mi><mml:mtext mathvariant="normal">unique</mml:mtext></mml:msub><mml:mo stretchy="false" form="prefix">|</mml:mo></mml:mrow><mml:mrow><mml:mo stretchy="false" form="prefix">|</mml:mo><mml:msub><mml:mi>V</mml:mi><mml:mtext mathvariant="normal">total</mml:mtext></mml:msub><mml:mo stretchy="false" form="prefix">|</mml:mo></mml:mrow></mml:mfrac><mml:mo>&lt;</mml:mo><mml:mn>0.40</mml:mn></mml:mrow></mml:math></alternatives></inline-formula>).
+    Submissions with a quality score below 0.20 are flagged and
+    prevented from entering the ingestion queue.</p>
+  </sec>
+</sec>
+<sec id="research-impact-statement">
+  <title>Research Impact Statement</title>
+  <p>The primary deployment of this framework maintains the
+  <monospace>Isuru0x01/sinhala_stories</monospace> corpus on the Hugging
+  Face Hub, encompassing over 10.9 million rows (4.5+ billion
+  characters) of validated Sinhala literature, folklore, and
+  contemporary writing
+  (<xref alt="Samarappulige et al., 2026" rid="ref-samarappulige2026zenodo" ref-type="bibr">Samarappulige
+  et al., 2026</xref>).
+  <xref alt="[fig:distribution]" rid="figU003Adistribution">[fig:distribution]</xref>
+  shows the character length distribution of the dataset, highlighting
+  broad coverage ranging from concise vignettes to extensive narrative
+  chapters.</p>
+  <fig>
+    <caption><p>Length distribution of the 10.9M-row Sinhala stories
+    corpus curated by the
+    framework.<styled-content id="figU003Adistribution"></styled-content></p></caption>
+    <graphic mimetype="image" mime-subtype="png" xlink:href="figure2_distribution.png" />
+  </fig>
+  <p>The corpus has been archived on Zenodo with persistent identifier
+  <monospace>10.5281/zenodo.21195380</monospace>. Crucially, the dataset
+  curated by this software directly powers downstream research in
+  low-resource representation learning. Specifically, the corpus is
+  utilized in experimental tokenizer research exploring
+  akshara-preserving subword tokenizers for Sinhala large language
+  models, evaluating token fertility, Akshara Integrity Rate (AIR), and
+  byte-fallback frequencies against state-of-the-art multilingual
+  baselines (e.g., LLaMA-3, Qwen-2.5, Gemma-2, and XLM-RoBERTa).
+  Furthermore, the declarative design of
+  <monospace>config.yaml</monospace> enables immediate adoption by
+  research teams working on other low-resource Brahmic and African
+  language varieties.</p>
+</sec>
+<sec id="ai-usage-disclosure">
+  <title>AI Usage Disclosure</title>
+  <p>Generative artificial intelligence tools (specifically Anthropic
+  Claude and Google Gemini) were utilized during project development for
+  drafting boilerplate unit test cases, refactoring modular components,
+  and reviewing stylistic clarity in documentation. All core algorithmic
+  designs, validation logic, system architecture, dataset curation
+  workflows, and manuscript prose were conceived, implemented,
+  empirically tested, and verified by the authors.</p>
+</sec>
+<sec id="acknowledgements">
+  <title>Acknowledgements</title>
+  <p>We express our gratitude to the contributors of the open-source
+  libraries utilized in this project, including Streamlit, Hugging Face
+  Hub, Datasets, PyArrow, NumPy
+  (<xref alt="Walt et al., 2011" rid="ref-vanderwalt2011numpy" ref-type="bibr">Walt
+  et al., 2011</xref>), and langid.py. We also thank the native-speaking
+  contributors who contributed stories to the Sinhala open-access
+  dataset.</p>
+</sec>
+</body>
+<back>
+<ref-list>
+  <title></title>
+  <ref id="ref-lui2012langid">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Lui</surname><given-names>Marco</given-names></name>
+        <name><surname>Baldwin</surname><given-names>Timothy</given-names></name>
+      </person-group>
+      <article-title>langid.py: An Off-the-Shelf Language Identification Tool</article-title>
+      <source>Proceedings of the 50th Annual Meeting of the Association for Computational Linguistics (ACL)</source>
+      <year iso-8601-date="2012">2012</year>
+      <fpage>25</fpage>
+      <lpage>30</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-lhoest2021datasets">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Lhoest</surname><given-names>Quentin</given-names></name>
+        <name><surname>Villanova del Moral</surname><given-names>Albert</given-names></name>
+        <name><surname>Jernite</surname><given-names>Yacine</given-names></name>
+        <name><surname>Thakur</surname><given-names>Abhishek</given-names></name>
+        <name><surname>Platen</surname><given-names>Patrick von</given-names></name>
+        <name><surname>Patil</surname><given-names>Suraj</given-names></name>
+        <name><surname>Chaumond</surname><given-names>Julien</given-names></name>
+        <name><surname>Mariike</surname><given-names>Ingmar</given-names></name>
+        <name><surname>Drame</surname><given-names>Khadidja</given-names></name>
+        <name><surname>Wolf</surname><given-names>Thomas</given-names></name>
+      </person-group>
+      <article-title>Datasets: A Community Library for Natural Language Processing</article-title>
+      <source>Proceedings of the 2021 Conference on Empirical Methods in Natural Language Processing (EMNLP): System Demonstrations</source>
+      <year iso-8601-date="2021">2021</year>
+      <pub-id pub-id-type="doi">10.18653/v1/2021.emnlp-demos.21</pub-id>
+      <fpage>175</fpage>
+      <lpage>184</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-wolf2020transformers">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Wolf</surname><given-names>Thomas</given-names></name>
+        <name><surname>Debut</surname><given-names>Lysandre</given-names></name>
+        <name><surname>Sanh</surname><given-names>Victor</given-names></name>
+        <name><surname>Chaumond</surname><given-names>Julien</given-names></name>
+        <name><surname>Delangue</surname><given-names>Clement</given-names></name>
+        <name><surname>Moi</surname><given-names>Anthony</given-names></name>
+        <name><surname>Cistac</surname><given-names>Pierric</given-names></name>
+        <name><surname>Rault</surname><given-names>Clara</given-names></name>
+        <name><surname>Louf</surname><given-names>Rémi</given-names></name>
+        <name><surname>Funtowicz</surname><given-names>Morgan</given-names></name>
+        <name><surname>Brew</surname><given-names>Jamie</given-names></name>
+      </person-group>
+      <article-title>Transformers: State-of-the-Art Natural Language Processing</article-title>
+      <source>Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP): System Demonstrations</source>
+      <year iso-8601-date="2020">2020</year>
+      <pub-id pub-id-type="doi">10.18653/v1/2020.emnlp-demos.6</pub-id>
+      <fpage>38</fpage>
+      <lpage>45</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-ranathunga2023sinhala">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Ranathunga</surname><given-names>Surangika</given-names></name>
+        <name><surname>Jayasena</surname><given-names>Sanath</given-names></name>
+        <name><surname>Dias</surname><given-names>Gihan</given-names></name>
+      </person-group>
+      <article-title>Neural Machine Translation for Low-Resource Languages: A Survey on Sinhala and Tamil</article-title>
+      <source>ACM Transactions on Asian and Low-Resource Language Information Processing</source>
+      <year iso-8601-date="2023">2023</year>
+      <volume>22</volume>
+      <issue>4</issue>
+      <pub-id pub-id-type="doi">10.1145/3578707</pub-id>
+      <fpage>1</fpage>
+      <lpage>35</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-joshi2020state">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Joshi</surname><given-names>Pratik</given-names></name>
+        <name><surname>Santy</surname><given-names>Sebastin</given-names></name>
+        <name><surname>Budhiraja</surname><given-names>Amar</given-names></name>
+        <name><surname>Bali</surname><given-names>Kalika</given-names></name>
+        <name><surname>Choudhury</surname><given-names>Monojit</given-names></name>
+      </person-group>
+      <article-title>The State and Fate of Linguistic Diversity and Inclusion in the NLP World</article-title>
+      <source>Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics (ACL)</source>
+      <year iso-8601-date="2020">2020</year>
+      <pub-id pub-id-type="doi">10.18653/v1/2020.acl-main.560</pub-id>
+      <fpage>6282</fpage>
+      <lpage>6293</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-nekoto2020participatory">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Nekoto</surname><given-names>Wilhelmina</given-names></name>
+        <name><surname>Marivate</surname><given-names>Vukosi</given-names></name>
+        <name><surname>Matsila</surname><given-names>Tshinndiwa</given-names></name>
+        <name><surname>Fasubaa</surname><given-names>Timi</given-names></name>
+        <name><surname>Kolawole</surname><given-names>Tajudeen</given-names></name>
+        <name><surname>Fagbohungbe</surname><given-names>Taiwo</given-names></name>
+        <name><surname>Akinola</surname><given-names>Solomon</given-names></name>
+        <name><surname>Muhammad</surname><given-names>Shamsuddeen</given-names></name>
+        <name><surname>Kabongo</surname><given-names>Salomon</given-names></name>
+        <name><surname>Osei</surname><given-names>Salomey</given-names></name>
+        <name><surname>others</surname></name>
+      </person-group>
+      <article-title>Participatory Research for Low-Resourced Machine Translation: A Case Study in African Languages</article-title>
+      <source>Findings of the Association for Computational Linguistics: EMNLP 2020</source>
+      <year iso-8601-date="2020">2020</year>
+      <pub-id pub-id-type="doi">10.18653/v1/2020.findings-emnlp.195</pub-id>
+      <fpage>2144</fpage>
+      <lpage>2160</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-vanderwalt2011numpy">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Walt</surname><given-names>Stéfan van der</given-names></name>
+        <name><surname>Colbert</surname><given-names>S. Chris</given-names></name>
+        <name><surname>Varoquaux</surname><given-names>Gaël</given-names></name>
+      </person-group>
+      <article-title>The NumPy Array: A Structure for Efficient Numerical Computation</article-title>
+      <source>Computing in Science &amp; Engineering</source>
+      <year iso-8601-date="2011">2011</year>
+      <volume>13</volume>
+      <issue>2</issue>
+      <pub-id pub-id-type="doi">10.1109/MCSE.2011.37</pub-id>
+      <fpage>22</fpage>
+      <lpage>30</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-pyarrow2024">
+    <element-citation publication-type="software">
+      <person-group person-group-type="author">
+        <string-name>Apache Arrow Developers</string-name>
+      </person-group>
+      <article-title>Apache Arrow: Cross-language development platform for in-memory data</article-title>
+      <year iso-8601-date="2024">2024</year>
+      <uri>https://arrow.apache.org/</uri>
+    </element-citation>
+  </ref>
+  <ref id="ref-kreutzer2022quality">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Kreutzer</surname><given-names>Julia</given-names></name>
+        <name><surname>Caswell</surname><given-names>Isaac</given-names></name>
+        <name><surname>Wang</surname><given-names>Lisa</given-names></name>
+        <name><surname>Wahab</surname><given-names>Ahsan</given-names></name>
+        <name><surname>Esch</surname><given-names>Daan van</given-names></name>
+        <name><surname>Madaan</surname><given-names>Nikhila</given-names></name>
+        <name><surname>Sharma</surname><given-names>Pooja</given-names></name>
+        <name><surname>others</surname></name>
+      </person-group>
+      <article-title>Quality at a Glance: An Audit of Multilingual Datasets and Other Open Resources for Natural Language Processing</article-title>
+      <source>Transactions of the Association for Computational Linguistics</source>
+      <year iso-8601-date="2022">2022</year>
+      <volume>10</volume>
+      <pub-id pub-id-type="doi">10.1162/tacl_a_00447</pub-id>
+      <fpage>50</fpage>
+      <lpage>72</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-samarappulige2026zenodo">
+    <element-citation>
+      <person-group person-group-type="author">
+        <name><surname>Samarappulige</surname><given-names>Isuru</given-names></name>
+        <name><surname>Ekanayake</surname><given-names>Kaushalya</given-names></name>
+        <name><surname>Uyangoda</surname><given-names>Hasandi</given-names></name>
+      </person-group>
+      <article-title>Sinhala Stories: A 10.9-Million-Row Open Access Corpus for Low-Resource Natural Language Processing</article-title>
+      <publisher-name>Zenodo</publisher-name>
+      <year iso-8601-date="2026">2026</year>
+      <pub-id pub-id-type="doi">10.5281/zenodo.21195380</pub-id>
+    </element-citation>
+  </ref>
+</ref-list>
+</back>
+</article>
