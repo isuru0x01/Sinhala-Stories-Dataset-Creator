@@ -231,9 +231,44 @@ def compute_spam_score_detailed(text: str) -> Tuple[float, List[str]]:
             score -= penalty
             reasons.append(f"High punctuation ratio: {punc_ratio:.1%} (-{penalty:.2f})")
 
+    # 8. Shannon character entropy gating (catches keyboard-mashing and synthesized loops)
+    if len(text) >= 40:
+        entropy = compute_shannon_entropy(text)
+        if entropy < 2.5:
+            penalty = (2.5 - entropy) * 0.6
+            if entropy < 1.8:
+                penalty += 0.4
+            score -= penalty
+            reasons.append(f"Low character entropy: {entropy:.2f} bits/char (-{penalty:.2f})")
+
+    # 9. Bigram repetition ratio (catches repeating phrase loops)
+    if words and len(words) >= 6:
+        bigrams = [(words[i], words[i + 1]) for i in range(len(words) - 1)]
+        unique_bigrams = set(bigrams)
+        bigram_dupe_ratio = 1.0 - (len(unique_bigrams) / len(bigrams))
+        if bigram_dupe_ratio > 0.40:
+            penalty = (bigram_dupe_ratio - 0.40) * 1.5
+            score -= penalty
+            reasons.append(f"High bigram repetition: {bigram_dupe_ratio:.1%} (-{penalty:.2f})")
+
     # Clamp score to [0.0, 1.0]
     final_score = max(0.0, min(1.0, score))
     return final_score, reasons
+
+
+def compute_shannon_entropy(text: str) -> float:
+    """
+    Computes Shannon character entropy in bits per character:
+    H(X) = -sum(P(c) * log2(P(c)))
+    Natural Sinhala prose typically has H >= 3.2 bits/char.
+    Low entropy (< 2.5) indicates repetitive character loops or keyboard mashing.
+    """
+    if not text:
+        return 0.0
+    from collections import Counter
+    counts = Counter(text)
+    total = len(text)
+    return -sum((c / total) * math.log2(c / total) for c in counts.values())
 
 
 def compute_spam_score(text: str) -> float:

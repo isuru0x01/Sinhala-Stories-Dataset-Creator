@@ -36,3 +36,6 @@ dev = [
 Repository = "https://github.com/isuru0x01/Sinhala-Stories-Dataset-Creator"
 Dataset = "https://huggingface.co/datasets/Isuru0x01/sinhala_stories"
 Archive = "https://doi.org/10.5281/zenodo.21195380"
+
+[tool.setuptools]
+py-modules = ["validator", "merge_pending_into_main"]

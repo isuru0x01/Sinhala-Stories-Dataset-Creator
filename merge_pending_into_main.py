@@ -31,23 +31,18 @@ HASHES_PATH = STORAGE_CFG.get("hashes_path", "hashes.txt")
 BLOOM_PATH = STORAGE_CFG.get("bloom_path", "hashes.bloom")
 STATS_PATH = STORAGE_CFG.get("stats_path", "dataset_stats.json")
 
-# Validate and strip token
-if not HF_TOKEN:
-    raise ValueError(
-        "HF_TOKEN environment variable is not set. "
-        "Please set it in your GitHub repository secrets or environment."
-    )
-HF_TOKEN = HF_TOKEN.strip()
-if not HF_TOKEN:
-    raise ValueError(
-        "HF_TOKEN environment variable is empty (only whitespace). "
-        "Please set a valid Hugging Face token in your GitHub repository secrets."
-    )
-
-# Initialize API with validated token
-api = HfApi(token=HF_TOKEN)
+def get_hf_api() -> HfApi:
+    """Returns initialized HfApi instance with validated token."""
+    token = os.environ.get("HF_TOKEN")
+    if not token or not token.strip():
+        raise ValueError(
+            "HF_TOKEN environment variable is not set. "
+            "Please set it in your GitHub repository secrets or environment."
+        )
+    return HfApi(token=token.strip())
 
 def list_repo_files():
+    api = get_hf_api()
     return api.list_repo_files(repo_id=REPO_ID, repo_type=REPO_TYPE)
 
 def list_pending_files(files):
@@ -221,6 +216,7 @@ def sync_stats_if_needed():
         print(f"Compiled binary Bloom Filter ({len(all_h)} fingerprints, {len(bf.to_bytes())} bytes).")
 
     if operations:
+        api = get_hf_api()
         api.create_commit(
             repo_id=REPO_ID,
             repo_type=REPO_TYPE,
@@ -348,6 +344,7 @@ def merge_and_push(pending_ds, pending_files, start_time):
         cleanup_operations.append(CommitOperationAdd(path_in_repo="merge_stats.json", path_or_fileobj=buf_stats))
         
         if cleanup_operations:
+            api = get_hf_api()
             api.create_commit(
                 repo_id=REPO_ID,
                 repo_type=REPO_TYPE,

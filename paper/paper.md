@@ -72,7 +72,7 @@ The framework operates as a decoupled, three-tier ingestion and synchronization 
 
 * **Staged Micro-Queuing vs. Centralized Relational Database:** Choosing remote micro-file staging over an external database (e.g., PostgreSQL) eliminates hosting expenses and authentication overhead. The minor trade-off is eventual consistency, as submissions reside in `pending/` until the next scheduled batch merge.
 * **Delta Parquet Partitioning vs. Monolithic File Appending:** Appending records to an auxiliary delta partition (`train-append.parquet`) allows the merge engine to run within standard memory constraints (sub-500 MB RAM), completely bypassing the prohibitive network transfer and memory overhead of rewriting the 10.9M-row base corpus.
-* **Two-Tier Deduplication vs. Exhaustive Pairwise Comparisons:** Running pairwise n-gram or string distance comparisons against millions of records is computationally intractable ($O(N)$) during real-time web requests. The framework trades full pairwise fuzzy matching across the historical archive for instant $O(1)$ SHA-256 cryptographic hash lookup across the full corpus, reserving fuzzy lexical Jaccard matching ($J(A, B) \ge 0.85$) strictly for the transient pending staging queue.
+* **Two-Tier Deduplication vs. Exhaustive Pairwise Comparisons:** Running pairwise n-gram or string distance comparisons against millions of records is computationally intractable ($O(N)$) during real-time web requests. The framework trades full pairwise fuzzy matching across the historical archive for instant $O(1)$ SHA-256 cryptographic hash lookup via an optimized binary Bloom Filter and hash catalog, reserving fuzzy lexical Jaccard matching ($J(A, B) \ge 0.85$) strictly for the transient pending staging queue.
 
 # Quality Control and Validation Pipeline
 
@@ -87,11 +87,12 @@ $$\text{Ratio}_{\text{script}} = \frac{\sum_{c \in S_{\text{alpha}}} \mathbb{I}(
 Submissions falling below the configured threshold ($\text{Ratio}_{\text{script}} < 0.90$) are rejected. Subsequently, `langid` [@lui2012langid] computes language identification probabilities using a normalized softmax over candidate log-likelihoods, ensuring high-confidence classification ($P(\text{target}) \ge 0.90$).
 
 ### Heuristic Spam and Synthetic Text Gating
-A composite heuristic quality score penalizes abnormal repetition patterns:
+A composite heuristic quality score penalizes abnormal repetition patterns and synthetic gibberish:
 * Consecutive character repetitions of length $\ge 5$;
-* Repetitive consecutive n-grams;
+* Repetitive consecutive n-grams and high bigram repetition ratios ($>40\%$);
 * High sentence-level duplication ratios;
-* Abnormal vocabulary diversity ($\frac{|V_{\text{unique}}|}{|V_{\text{total}}|} < 0.40$).
+* Abnormal vocabulary diversity ($\frac{|V_{\text{unique}}|}{|V_{\text{total}}|} < 0.40$);
+* Shannon character entropy gating ($H(X) = -\sum P(c)\log_2 P(c) < 2.5\text{ bits/char}$), penalizing keyboard-mashing, bot loops, and low-diversity generation.
 Submissions with a quality score below 0.20 are flagged and prevented from entering the ingestion queue.
 
 # Research Impact Statement

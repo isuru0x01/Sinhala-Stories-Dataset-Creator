@@ -11,6 +11,7 @@ from validator import (
     validate_text_entry,
     BloomFilter,
     build_bloom_filter,
+    compute_shannon_entropy,
 )
 
 
@@ -119,3 +120,24 @@ def test_bloom_filter_deduplication():
         assert len(bf_file_loaded.bit_array) == len(bf.bit_array)
         for h in sample_hashes:
             assert h in bf_file_loaded
+
+
+def test_shannon_entropy_and_ngram_repetition_gating():
+    # 1. Natural Sinhala prose has healthy character entropy (> 3.5 bits/char)
+    natural_story = (
+        "පුරාණ ලංකාවේ රජවරුන් විසින් ඉදිකරන ලද මහා වැව් සහ දාගැබ් අදටත් අපගේ අභිමානය විදහා දක්වයි. "
+        "එම නිර්මාණ තුළින් අපේ මුතුන්මිත්තන්ගේ දැනුම සහ තාක්ෂණික කුසලතාව ඉතා හොඳින් පැහැදිලි වේ."
+    )
+    entropy_natural = compute_shannon_entropy(natural_story)
+    assert entropy_natural >= 3.5
+
+    # 2. Keyboard-smashing or character loops have artificially low entropy (< 2.0)
+    mash_spam = "අඅඅබබබඅඅඅබබබඅඅඅබබබඅඅඅබබබඅඅඅබබබඅඅඅබබබඅඅඅබබබඅඅඅබබබඅඅඅබබබඅඅඅබබබ"
+    entropy_spam = compute_shannon_entropy(mash_spam)
+    assert entropy_spam < 2.0
+    assert compute_spam_score(mash_spam) < 0.20
+
+    # 3. Repeating phrase loops trigger bigram repetition penalty
+    phrase_loop = "මම ගියා මම ගියා මම ගියා මම ගියා මම ගියා මම ගියා මම ගියා මම ගියා මම ගියා"
+    score_phrase_loop = compute_spam_score(phrase_loop)
+    assert score_phrase_loop < 0.20
