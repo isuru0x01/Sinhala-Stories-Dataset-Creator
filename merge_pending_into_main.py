@@ -7,7 +7,7 @@ from huggingface_hub import HfApi, hf_hub_download, CommitOperationDelete
 from datasets import load_dataset, Dataset, concatenate_datasets, Features, Value
 from datetime import datetime, timezone, timedelta
 
-from validator import load_config, normalize_text, compute_sha256
+from validator import load_config, normalize_text, compute_sha256, BloomFilter, build_bloom_filter
 
 # Load settings from config.yaml with default fallbacks
 CONFIG = load_config()
@@ -28,6 +28,7 @@ REPO_TYPE = "dataset"
 PENDING_DIR = STORAGE_CFG.get("pending_dir", "pending")   # remote repo path where small jsonl files are stored
 APPEND_PARQUET_PATH = STORAGE_CFG.get("append_parquet_path", "data/train-append.parquet")
 HASHES_PATH = STORAGE_CFG.get("hashes_path", "hashes.txt")
+BLOOM_PATH = STORAGE_CFG.get("bloom_path", "hashes.bloom")
 STATS_PATH = STORAGE_CFG.get("stats_path", "dataset_stats.json")
 
 # Validate and strip token
@@ -159,8 +160,8 @@ def compute_dataset_stats(merged_append):
     }
 
 def sync_stats_if_needed():
-    """Checks if dataset_stats.json on Hugging Face is out of sync and updates it if so."""
-    print("Checking if dataset_stats.json needs synchronization...")
+    """Checks if dataset_stats.json and hashes.bloom on Hugging Face need synchronization."""
+    print("Checking if dataset_stats.json and hashes.bloom need synchronization...")
     try:
         stats_path = hf_hub_download(
             repo_id=REPO_ID,
@@ -180,25 +181,53 @@ def sync_stats_if_needed():
         append_ds = None
 
     fresh_stats = compute_dataset_stats(append_ds)
-    if (
+    stats_out_of_sync = not (
         current_stats.get("total_stories") == fresh_stats["total_stories"]
         and current_stats.get("total_size_chars") == fresh_stats["total_size_chars"]
         and current_stats.get("longest_len") == fresh_stats["longest_len"]
-    ):
-        print(f"Dataset stats are already synchronized ({fresh_stats['total_stories']} stories).")
+    )
+
+    # Check if binary Bloom Filter exists
+    bloom_missing = False
+    try:
+        hf_hub_download(repo_id=REPO_ID, filename=BLOOM_PATH, repo_type="dataset", token=HF_TOKEN)
+    except Exception:
+        bloom_missing = True
+
+    if not stats_out_of_sync and not bloom_missing:
+        print(f"Dataset stats ({fresh_stats['total_stories']} stories) and Bloom Filter are already synchronized.")
         return
 
-    print(f"Stats out of sync! Current in repo: {current_stats.get('total_stories')}, Expected: {fresh_stats['total_stories']}. Updating...")
+    operations = []
     import io
     from huggingface_hub import CommitOperationAdd
-    buf_ds_stats = io.BytesIO(json.dumps(fresh_stats, indent=2).encode("utf-8"))
-    api.create_commit(
-        repo_id=REPO_ID,
-        repo_type=REPO_TYPE,
-        operations=[CommitOperationAdd(path_in_repo=STATS_PATH, path_or_fileobj=buf_ds_stats)],
-        commit_message=f"Sync dataset_stats.json to exact story count ({fresh_stats['total_stories']})"
-    )
-    print(f"Successfully synced dataset_stats.json to {fresh_stats['total_stories']} stories.")
+
+    if stats_out_of_sync:
+        print(f"Stats out of sync! Current in repo: {current_stats.get('total_stories')}, Expected: {fresh_stats['total_stories']}. Updating...")
+        buf_ds_stats = io.BytesIO(json.dumps(fresh_stats, indent=2).encode("utf-8"))
+        operations.append(CommitOperationAdd(path_in_repo=STATS_PATH, path_or_fileobj=buf_ds_stats))
+
+    if bloom_missing:
+        print("hashes.bloom is missing in repository. Compiling from hashes.txt...")
+        try:
+            h_path = hf_hub_download(repo_id=REPO_ID, filename=HASHES_PATH, repo_type="dataset", token=HF_TOKEN)
+            with open(h_path, "r", encoding="utf-8") as f:
+                all_h = [l.strip() for l in f if l.strip()]
+        except Exception:
+            all_h = []
+        bf = build_bloom_filter(all_h, capacity=max(len(all_h) * 2, 100000), error_rate=0.001)
+        buf_bloom = io.BytesIO(bf.to_bytes())
+        operations.append(CommitOperationAdd(path_in_repo=BLOOM_PATH, path_or_fileobj=buf_bloom))
+        print(f"Compiled binary Bloom Filter ({len(all_h)} fingerprints, {len(bf.to_bytes())} bytes).")
+
+    if operations:
+        api.create_commit(
+            repo_id=REPO_ID,
+            repo_type=REPO_TYPE,
+            operations=operations,
+            commit_message=f"Sync dataset metadata (stats: {fresh_stats['total_stories']} stories, Bloom Filter compiled)"
+        )
+        print("Successfully synced metadata to Hugging Face repository.")
 
 def merge_and_push(pending_ds, pending_files, start_time):
     if pending_ds is None or len(pending_ds) == 0:
@@ -255,8 +284,8 @@ def merge_and_push(pending_ds, pending_files, start_time):
         parquet_path = os.path.join(tmpdir, "train-append.parquet")
         merged_append.to_parquet(parquet_path)
         
-        # 6. Update hashes.txt in append mode on disk
-        print("Updating hashes.txt...")
+        # 6. Update hashes.txt and generate binary Bloom Filter
+        print("Updating hashes.txt and generating hashes.bloom...")
         try:
             hashes_path = hf_hub_download(
                 repo_id=REPO_ID,
@@ -279,10 +308,18 @@ def merge_and_push(pending_ds, pending_files, start_time):
                 for h in new_hashes:
                     f.write(h + "\n")
 
+        with open(hashes_upload_file, "r", encoding="utf-8") as f:
+            all_hashes = [line.strip() for line in f if line.strip()]
+
+        bloom = build_bloom_filter(all_hashes, capacity=max(len(all_hashes) * 2, 100000), error_rate=0.001)
+        bloom_upload_file = os.path.join(tmpdir, os.path.basename(BLOOM_PATH))
+        bloom.save(bloom_upload_file)
+        print(f"Bloom Filter generated: {os.path.getsize(bloom_upload_file)} bytes for {len(all_hashes)} fingerprints.")
+
         duration = time.time() - start_time
         print("Uploading updated files to Hugging Face...")
         
-        # Clean up processed pending files and add stats/parquet/hashes
+        # Clean up processed pending files and add stats/parquet/hashes/bloom
         cleanup_operations = []
         for file_path in pending_files:
             cleanup_operations.append(CommitOperationDelete(path_in_repo=file_path))
@@ -292,6 +329,9 @@ def merge_and_push(pending_ds, pending_files, start_time):
         
         # Add hashes.txt
         cleanup_operations.append(CommitOperationAdd(path_in_repo=HASHES_PATH, path_or_fileobj=hashes_upload_file))
+
+        # Add hashes.bloom
+        cleanup_operations.append(CommitOperationAdd(path_in_repo=BLOOM_PATH, path_or_fileobj=bloom_upload_file))
 
         # Add dataset_stats.json
         buf_ds_stats = io.BytesIO(json.dumps(dataset_stats, indent=2).encode("utf-8"))

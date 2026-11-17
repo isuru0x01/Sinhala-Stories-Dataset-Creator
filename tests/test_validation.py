@@ -1,4 +1,6 @@
 import pytest
+import os
+import tempfile
 from validator import (
     normalize_text,
     calculate_script_ratio,
@@ -7,6 +9,8 @@ from validator import (
     compute_sha256,
     load_config,
     validate_text_entry,
+    BloomFilter,
+    build_bloom_filter,
 )
 
 
@@ -79,3 +83,39 @@ def test_validate_text_entry_flow():
     )
     errors = validate_text_entry(valid_story)
     assert len(errors) == 0
+
+
+def test_bloom_filter_deduplication():
+    # 1. Test insertion and membership
+    sample_hashes = [
+        compute_sha256(f"කතාව {i}") for i in range(100)
+    ]
+    bf = build_bloom_filter(sample_hashes, capacity=1000, error_rate=0.001)
+
+    for h in sample_hashes:
+        assert h in bf
+
+    # 2. Test non-inserted item
+    unseen_hash = compute_sha256("සම්පූර්ණයෙන්ම වෙනස් අලුත් කතාවක්")
+    assert unseen_hash not in bf
+
+    # 3. Test binary serialization roundtrip
+    data = bf.to_bytes()
+    assert isinstance(data, bytes)
+    assert data[:4] == BloomFilter.MAGIC
+
+    bf_restored = BloomFilter.from_bytes(data)
+    for h in sample_hashes:
+        assert h in bf_restored
+    assert unseen_hash not in bf_restored
+
+    # 4. Test file save and load roundtrip
+    with tempfile.TemporaryDirectory() as tmpdir:
+        bloom_file = os.path.join(tmpdir, "hashes.bloom")
+        bf.save(bloom_file)
+        assert os.path.exists(bloom_file)
+
+        bf_file_loaded = BloomFilter.load(bloom_file)
+        assert len(bf_file_loaded.bit_array) == len(bf.bit_array)
+        for h in sample_hashes:
+            assert h in bf_file_loaded

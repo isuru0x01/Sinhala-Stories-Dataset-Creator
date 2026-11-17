@@ -23,4 +23,5 @@ storage:
   local_queue_dir: "local_queue"
   append_parquet_path: "data/train-append.parquet"
   hashes_path: "hashes.txt"
+  bloom_path: "hashes.bloom"
   stats_path: "dataset_stats.json"

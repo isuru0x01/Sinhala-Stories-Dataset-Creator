@@ -7,9 +7,11 @@ Extracts pure functional logic to enable independent automated unit testing.
 from __future__ import annotations
 import os
 import re
+import math
+import struct
 import hashlib
 import unicodedata
-from typing import Dict, Any, Tuple, List, Set, Optional
+from typing import Dict, Any, Tuple, List, Set, Optional, Iterable
 
 import langid
 import numpy as np
@@ -41,6 +43,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "local_queue_dir": "local_queue",
         "append_parquet_path": "data/train-append.parquet",
         "hashes_path": "hashes.txt",
+        "bloom_path": "hashes.bloom",
         "stats_path": "dataset_stats.json",
     },
 }
@@ -294,3 +297,94 @@ def validate_text_entry(text: str, config: Optional[Dict[str, Any]] = None) -> L
         errors.append(f"Rejected as potential spam (Quality score: {spam_score:.2f} < {min_spam}). Reasons: {reason_str}")
 
     return errors
+
+
+class BloomFilter:
+    """
+    Compact, high-performance binary Bloom Filter for O(1) deduplication.
+    Uses double hashing (Kirsch-Mitzenmacher optimization) over SHA-256 digests.
+    Requires zero external C-dependencies (pure standard library).
+    """
+    MAGIC = b"BLM1"
+
+    def __init__(self, capacity: int = 100000, error_rate: float = 0.001):
+        self.capacity = max(1, capacity)
+        self.error_rate = min(max(error_rate, 1e-6), 0.1)
+        # Optimal bit size: m = - (n * ln(p)) / (ln(2)^2)
+        num_bits = int(- (self.capacity * math.log(self.error_rate)) / (math.log(2) ** 2))
+        self.bit_size = max(64, num_bits)
+        # Optimal number of hash functions: k = (m / n) * ln(2)
+        self.num_hashes = max(1, round((self.bit_size / self.capacity) * math.log(2)))
+        self.byte_count = (self.bit_size + 7) // 8
+        self.bit_array = bytearray(self.byte_count)
+        self.count = 0
+
+    def _get_hashes(self, item: str):
+        # 32-byte SHA256 digest provides two independent 64-bit integer seeds (h1, h2)
+        digest = hashlib.sha256(item.encode("utf-8")).digest()
+        h1 = struct.unpack(">Q", digest[:8])[0]
+        h2 = struct.unpack(">Q", digest[8:16])[0]
+        for i in range(self.num_hashes):
+            yield (h1 + i * h2) % self.bit_size
+
+    def add(self, item: str) -> None:
+        """Adds an item (e.g. SHA-256 hex string or text) to the filter."""
+        for bit in self._get_hashes(item):
+            self.bit_array[bit // 8] |= (1 << (bit % 8))
+        self.count += 1
+
+    def __contains__(self, item: str) -> bool:
+        """Returns True if the item might be in the set, False if definitely not."""
+        for bit in self._get_hashes(item):
+            if not (self.bit_array[bit // 8] & (1 << (bit % 8))):
+                return False
+        return True
+
+    def to_bytes(self) -> bytes:
+        """Serializes the filter into a compact binary representation."""
+        header = struct.pack(">4sIIH", self.MAGIC, self.bit_size, self.num_hashes, self.count)
+        return header + bytes(self.bit_array)
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "BloomFilter":
+        """Deserializes a BloomFilter instance from binary data."""
+        if len(data) < 14:
+            raise ValueError("Invalid bloom filter binary data (too short)")
+        magic, bit_size, num_hashes, count = struct.unpack(">4sIIH", data[:14])
+        if magic != cls.MAGIC:
+            raise ValueError(f"Invalid magic bytes: {magic}")
+        bf = cls.__new__(cls)
+        bf.bit_size = bit_size
+        bf.num_hashes = num_hashes
+        bf.count = count
+        bf.byte_count = (bit_size + 7) // 8
+        expected_len = 14 + bf.byte_count
+        if len(data) < expected_len:
+            raise ValueError(f"Truncated bloom filter data: expected {expected_len} bytes, got {len(data)}")
+        bf.bit_array = bytearray(data[14:expected_len])
+        bf.capacity = max(count * 2, 100000)
+        bf.error_rate = 0.001
+        return bf
+
+    def save(self, filepath: str) -> None:
+        """Writes the binary filter to disk."""
+        with open(filepath, "wb") as f:
+            f.write(self.to_bytes())
+
+    @classmethod
+    def load(cls, filepath: str) -> "BloomFilter":
+        """Loads a BloomFilter instance from a file."""
+        with open(filepath, "rb") as f:
+            return cls.from_bytes(f.read())
+
+
+def build_bloom_filter(hashes: Iterable[str], capacity: int = 100000, error_rate: float = 0.001) -> BloomFilter:
+    """Builds and populates a BloomFilter from an iterable of hash strings."""
+    hash_list = list(hashes)
+    cap = max(len(hash_list) * 2, capacity)
+    bf = BloomFilter(capacity=cap, error_rate=error_rate)
+    for h in hash_list:
+        clean_h = h.strip()
+        if clean_h:
+            bf.add(clean_h)
+    return bf

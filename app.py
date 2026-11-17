@@ -22,6 +22,7 @@ from validator import (
     compute_jaccard_similarity,
     compute_spam_score,
     compute_spam_score_detailed,
+    BloomFilter,
 )
 
 # Load configuration from config.yaml with default fallbacks
@@ -47,6 +48,7 @@ PENDING_DIR = STORAGE_CFG.get("pending_dir", "pending")
 LOCAL_QUEUE_DIR = STORAGE_CFG.get("local_queue_dir", "local_queue")
 APPEND_PARQUET_PATH = STORAGE_CFG.get("append_parquet_path", "data/train-append.parquet")
 HASHES_PATH = STORAGE_CFG.get("hashes_path", "hashes.txt")
+BLOOM_PATH = STORAGE_CFG.get("bloom_path", "hashes.bloom")
 STATS_PATH = STORAGE_CFG.get("stats_path", "dataset_stats.json")
 
 # Exact baseline metrics from the 10 immutable base shards (train-00000 to train-00009)
@@ -224,6 +226,24 @@ def get_main_dataset_hashes():
         log_error(f"Failed to load hashes.txt (this is normal if the first merge script hasn't run yet): {str(e)}", traceback.format_exc(), 0)
         return set()
 
+@st.cache_resource(ttl=300)
+def load_bloom_filter() -> BloomFilter | None:
+    """
+    Downloads and deserializes the compact binary Bloom Filter (hashes.bloom)
+    from Hugging Face. Provides O(1) duplicate lookups in < 1ms with sub-200KB payload.
+    """
+    try:
+        local_path = hf_hub_download(
+            repo_id=DATASET_REPO,
+            filename=BLOOM_PATH,
+            repo_type="dataset",
+            token=HUGGINGFACE_TOKEN,
+            force_download=True
+        )
+        return BloomFilter.load(local_path)
+    except Exception:
+        return None
+
 @st.cache_data(ttl=30)
 def list_pending_filenames():
     """Lists files in the pending/ folder on Hugging Face."""
@@ -268,9 +288,16 @@ def check_duplicate(normalized_story: str) -> tuple[bool, str]:
             pass
             
     # 2. Check main dataset
-    main_hashes = get_main_dataset_hashes()
-    if new_hash in main_hashes:
-        return True, "❌ Story already exists in the dataset (Exact duplicate)."
+    # Fast path: Try compact binary Bloom Filter first (O(1) in < 1ms)
+    bloom = load_bloom_filter()
+    if bloom is not None:
+        if new_hash in bloom:
+            return True, "❌ Story already exists in the dataset (Exact duplicate detected by Bloom Filter)."
+    else:
+        # Fallback: Plain-text hashes.txt
+        main_hashes = get_main_dataset_hashes()
+        if new_hash in main_hashes:
+            return True, "❌ Story already exists in the dataset (Exact duplicate)."
             
     return False, ""
 
@@ -765,6 +792,15 @@ def show_admin_page():
     except Exception as d_err:
         d_latency = time.time() - t_duck
         st.warning(f"⚠️ DuckDB Live Parquet Engine: Inactive or fallback ({d_err}) [Latency: {d_latency:.2f}s]")
+        
+    # Binary Bloom Filter Deduplication Health Check
+    t_bloom = time.time()
+    bf = load_bloom_filter()
+    b_latency = time.time() - t_bloom
+    if bf is not None:
+        st.success(f"✅ Binary Bloom Filter Deduplicator: OK ({bf.count:,} fingerprints loaded in {b_latency:.3f}s, size: {bf.byte_count/1024:.1f} KB)")
+    else:
+        st.info("ℹ️ Binary Bloom Filter: Not generated yet on remote repo (using hashes.txt fallback)")
         
     st.subheader("Performance Logs")
     perf_file = "logs/perf.log"
