@@ -96,7 +96,7 @@ Submissions with a quality score below 0.20 are flagged and prevented from enter
 
 # Research Impact Statement
 
-The primary deployment of this framework maintains the `Isuru0x01/sinhala_stories` corpus on the Hugging Face Hub, encompassing over 10.9 million rows (4.5+ billion characters) of validated Sinhala literature, folklore, and contemporary writing [@samarappulige2026zenodo]. \autoref{fig:distribution} shows the character length distribution of the dataset, highlighting broad coverage ranging from concise vignettes to extensive narrative chapters.
+The primary deployment of this framework maintains the `Isuru0x01/sinhala_stories` corpus on the Hugging Face Hub, encompassing over 10.9 million rows (1.23+ billion characters, across 4.5+ GB of uncompressed text) of validated Sinhala literature, folklore, and contemporary writing [@samarappulige2026zenodo]. \autoref{fig:distribution} shows the character length distribution of the dataset, highlighting broad coverage ranging from concise vignettes to extensive narrative chapters.
 
 ![Length distribution of the 10.9M-row Sinhala stories corpus curated by the framework.\label{fig:distribution}](figure2_distribution.png)
 

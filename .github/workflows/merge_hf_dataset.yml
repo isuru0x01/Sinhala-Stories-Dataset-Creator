@@ -1,6 +1,8 @@
 name: Merge Pending Hugging Face Dataset
 
 on:
+  push:
+    branches: [ main, master ]
   schedule:
     - cron: "*/5 * * * *"   # every 5 minutes
   workflow_dispatch:        # allows manual trigger
